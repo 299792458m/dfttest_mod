@@ -1,3 +1,5 @@
+gitの使い方が良くわかってないので変なところがあっても気にしないでください
+
 # dfttest
 this is fork of dfttest 1.9.4. and some speed tune for my enviroment is added.
 mainly tuned at dither function(it costs wastefully a lot).
