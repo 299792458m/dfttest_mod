@@ -619,12 +619,12 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 
 			const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
 
-			float v;
+			int v;
 			int x=0;
 
 			{
 				float qerror;
-				v = min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dc[x + 1] += qerror * floydst[0];
@@ -640,19 +640,19 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 					rand[ii]=mtr.randf()*scale;
 				}
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f + rand[0] - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + rand[0] - off, 0.0f), 255.0f);
 				dst[x    ] = (unsigned char)v;		//new pixel
 				qerror[0] = p[x] - v;
 
-				v = min(max( p[x+1] + dc[x+1] + 0.5f + rand[1] - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x+1] + dc[x+1] + 0.5f + rand[1] - off, 0.0f), 255.0f);
 				dst[x + 1] = (unsigned char)v;		//new pixel
 				qerror[1] = p[x+1] - v;
 
-				v = min(max( p[x+2] + dc[x+2] + 0.5f + rand[2] - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x+2] + dc[x+2] + 0.5f + rand[2] - off, 0.0f), 255.0f);
 				dst[x + 2] = (unsigned char)v;		//new pixel
 				qerror[2] = p[x+2] - v;
 
-				v = min(max( p[x+3] + dc[x+3] + 0.5f + rand[3] - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x+3] + dc[x+3] + 0.5f + rand[3] - off, 0.0f), 255.0f);
 				dst[x + 3] = (unsigned char)v;		//new pixel
 				qerror[3] = p[x+3] - v;
 
@@ -671,7 +671,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 			{
 				float qerror;
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dc[x + 1] += qerror * floydst[0];
@@ -684,7 +684,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 			{
 				float qerror;
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dn[x - 1] += qerror * floydst[1];
@@ -736,12 +736,12 @@ void dither1_C(const float *p, unsigned char *dst, const int src_height,
 
 			const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
 
-			float v;
+			int v;	//何故かvをfloatにすると結果が0.2f位オフセットする
 			int x=0;
 
 			{
 				float qerror;
-				v = min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dc[x + 1] += qerror * floydst[0];
@@ -753,19 +753,19 @@ void dither1_C(const float *p, unsigned char *dst, const int src_height,
 			{
 				float qerror[4];
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);	//intへのキャスト、比較はコストがかかるのでfloatのままで済ませる
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);	//intへのキャスト、比較はコストがかかるのでfloatのままで済ませる
 				dst[x    ] = (unsigned char)v;		//new pixel
 				qerror[0] = p[x] - v;
 
-				v = min(max( p[x+1] + dc[x+1] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x+1] + dc[x+1] + 0.5f, 0.0f), 255.0f);
 				dst[x + 1] = (unsigned char)v;		//new pixel
 				qerror[1] = p[x+1] - v;
 
-				v = min(max( p[x+2] + dc[x+2] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x+2] + dc[x+2] + 0.5f, 0.0f), 255.0f);
 				dst[x + 2] = (unsigned char)v;		//new pixel
 				qerror[2] = p[x+2] - v;
 
-				v = min(max( p[x+3] + dc[x+3] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x+3] + dc[x+3] + 0.5f, 0.0f), 255.0f);
 				dst[x + 3] = (unsigned char)v;		//new pixel
 				qerror[3] = p[x+3] - v;
 
@@ -786,7 +786,7 @@ void dither1_C(const float *p, unsigned char *dst, const int src_height,
 			{
 				float qerror;
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dc[x + 1] += qerror * floydst[0];
@@ -799,7 +799,7 @@ void dither1_C(const float *p, unsigned char *dst, const int src_height,
 			{
 				float qerror;
 
-				v = min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dn[x - 1] += qerror * floydst[1];
