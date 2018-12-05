@@ -115,6 +115,12 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode);
 void dither1_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode);
+void dither_MT(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width, const int mode);
+void dither1_C_sub(const float *p, unsigned char *dst,
+	const int src_width, const int dst_pitch, const int width, const int mode, int ys, int ye);
+void dither_C_sub(const float *p, unsigned char *dst,
+	const int src_width, const int dst_pitch, const int width, const int mode, int ys, int ye);
 void intcast_SSE_1(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
 void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,

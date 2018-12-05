@@ -583,7 +583,7 @@ void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_ls
 
 void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
-{
+{	//元のコード
 	float *dither = (float*)malloc(2*width*sizeof(float));
 	float *dc = dither;
 	float *dn = dither+width;
@@ -593,106 +593,23 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 	memset(dc,0,width*sizeof(float));
 	for (int y=0; y<src_height; ++y)
 	{
-		memset(dn, 0, width*sizeof(float));
-
-		/*orig code
-		for (int x = 0; x < src_width; ++x)
+		memset(dn,0,width*sizeof(float));
+		for (int x=0; x<src_width; ++x)
 		{
 			const int v = mode == 1 ?
 				(int)(p[x]+dc[x]+0.5f) :
-				(int)(p[x]+dc[x]+0.5f+mtr.randf()*scale-off);
-			dst[x] = min(max(v, 0), 255);
-			const float qerror = p[x] - dst[x];
+				(int)(p[x]+mtr.randf()*scale-off+dc[x]+0.5f);
+			dst[x] = min(max(v,0),255);
+			const float qerror = p[x]-dst[x];
 			if (x != 0)
-				dn[x - 1] += qerror*0.1875f;
+				dn[x-1] += qerror*0.1875f;
 			dn[x] += qerror*0.3125f;
-			if (x != src_width - 1)
+			if (x != src_width-1)
 			{
-				dc[x + 1] += qerror*0.4375f;
-				dn[x + 1] += qerror*0.0625f;
+				dc[x+1] += qerror*0.4375f;
+				dn[x+1] += qerror*0.0625f;
 			}
 		}
-		*/
-
-		//opt code
-		{
-
-			const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
-
-			int v;
-			int x=0;
-
-			{
-				float qerror;
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dc[x + 1] += qerror * floydst[0];
-				dn[x    ] += qerror * floydst[2];
-				dn[x + 1] += qerror * floydst[3];
-			}
-
-			for (x=1; x < src_width - 5; x += 4)
-			{
-				float qerror[4];
-				float rand[4];
-				for (int ii=0;ii<4;ii++){
-					rand[ii]=mtr.randf()*scale;
-				}
-
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + rand[0] - off, 0.0f), 255.0f);
-				dst[x    ] = (unsigned char)v;		//new pixel
-				qerror[0] = p[x] - v;
-
-				v = (int)min(max( p[x+1] + dc[x+1] + 0.5f + rand[1] - off, 0.0f), 255.0f);
-				dst[x + 1] = (unsigned char)v;		//new pixel
-				qerror[1] = p[x+1] - v;
-
-				v = (int)min(max( p[x+2] + dc[x+2] + 0.5f + rand[2] - off, 0.0f), 255.0f);
-				dst[x + 2] = (unsigned char)v;		//new pixel
-				qerror[2] = p[x+2] - v;
-
-				v = (int)min(max( p[x+3] + dc[x+3] + 0.5f + rand[3] - off, 0.0f), 255.0f);
-				dst[x + 3] = (unsigned char)v;		//new pixel
-				qerror[3] = p[x+3] - v;
-
-				for (int ii = 0; ii < 4; ii++) {
-					dc[x + ii + 1] += qerror[ii] * floydst[0];		//current
-				}
-
-				for (int ii = 0; ii < 4; ii++) {
-					dn[x + ii - 1] += qerror[ii] * floydst[1];
-					dn[x + ii]     += qerror[ii] * floydst[2];
-					dn[x + ii + 1] += qerror[ii] * floydst[3];
-				}
-			}
-
-			for (; x < src_width-1; x++)
-			{
-				float qerror;
-
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dc[x + 1] += qerror * floydst[0];
-				dn[x - 1] += qerror * floydst[1];
-				dn[x    ] += qerror * floydst[2];
-				dn[x + 1] += qerror * floydst[3];
-			}
-
-			//x=src_width-1;
-			{
-				float qerror;
-
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f + mtr.randf()*scale - off, 0.0f), 255.0f);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dn[x - 1] += qerror * floydst[1];
-				dn[x    ] += qerror * floydst[2];
-			}
-		}
-		//opt code end
-
 		p += width;
 		dst += dst_pitch;
 		float *tn = dn;
@@ -704,120 +621,388 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 
 void dither1_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
-{
-	float *dither = (float*)malloc(2 * width * sizeof(float));
-	float *dc = dither;
-	float *dn = dither + width;	//__declspec(align(16))
-	const float scale = (mode - 1) + 0.5f;
-	const float off = scale*0.5f;
+{	//シングルスレッド最適化 mode==1
+
+	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));
+	float *dc = dither+1;	//配列の前後±1にアクセスするため
+	float *dn = dc + width +1;	//__declspec(align(16))
 	memset(dc, 0, width * sizeof(float));
+	
+
 	for (int y = 0; y<src_height; ++y)
 	{
 		memset(dn, 0, width * sizeof(float));
-		/*
-		//orig code
-		for (int x = 0; x < src_width; ++x)
-		{
-			const int v =(int)(p[x]+dc[x]+0.5f);
-			dst[x] = min(max(v, 0), 255);
-			const float qerror = p[x] - dst[x];
-			if (x != 0)
-			dn[x - 1] += qerror*0.1875f;
-			dn[x] += qerror*0.3125f;
-			if (x != src_width - 1)
-			{
-				dc[x + 1] += qerror*0.4375f;
-				dn[x + 1] += qerror*0.0625f;
-			}
-		}
-		*/
-		//opt code
 		{
 
 			const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
 
-			int v;	//何故かvをfloatにすると結果が0.2f位オフセットする
-			int x=0;
+			int x;
 
-			{
-				float qerror;
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dc[x + 1] += qerror * floydst[0];
-				dn[x    ] += qerror * floydst[2];
-				dn[x + 1] += qerror * floydst[3];
-			}
 
-			for (x=1; x < src_width - 5; x += 4)
+			for (x=0; x < src_width - 3; x += 4)
 			{
+
 				float qerror[4];
 
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);	//intへのキャスト、比較はコストがかかるのでfloatのままで済ませる
-				dst[x    ] = (unsigned char)v;		//new pixel
-				qerror[0] = p[x] - v;
+				int vtmp[4];
+				float vtmp2[4];
+				for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
 
-				v = (int)min(max( p[x+1] + dc[x+1] + 0.5f, 0.0f), 255.0f);
-				dst[x + 1] = (unsigned char)v;		//new pixel
-				qerror[1] = p[x+1] - v;
+				vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+				qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
 
-				v = (int)min(max( p[x+2] + dc[x+2] + 0.5f, 0.0f), 255.0f);
-				dst[x + 2] = (unsigned char)v;		//new pixel
-				qerror[2] = p[x+2] - v;
+				vtmp2[1] += qerror[0] * floydst[0];
+				vtmp[1] = min(max((int)vtmp2[1], 0), 255);
+				qerror[1] = p[x + 1] - vtmp[1];
 
-				v = (int)min(max( p[x+3] + dc[x+3] + 0.5f, 0.0f), 255.0f);
-				dst[x + 3] = (unsigned char)v;		//new pixel
-				qerror[3] = p[x+3] - v;
+				vtmp2[2] += qerror[1] * floydst[0];
+				vtmp[2] = min(max((int)vtmp2[2], 0), 255);
+				qerror[2] = p[x + 2] - vtmp[2];
 
-				for (int ii = 0; ii < 4; ii++) {
-					dc[x + ii + 1] += qerror[ii] * floydst[0];		//current
-				}
-				
-				for (int ii = 0; ii < 4; ii++) {
+				vtmp2[3] += qerror[2] * floydst[0];
+				vtmp[3] = min(max((int)vtmp2[3], 0), 255);
+				qerror[3] = p[x + 3] - vtmp[3];
+
+				/*for (int ii = 0; ii < 4; ii++) {
+					dst[x+ ii] = (unsigned char)vtmp[i];		//new pixel
+
+					dc[x + ii + 1] += qerror[ii] * floydst[0];
+
 					dn[x + ii - 1] += qerror[ii] * floydst[1];
 					dn[x + ii]     += qerror[ii] * floydst[2];
 					dn[x + ii + 1] += qerror[ii] * floydst[3];
-				}
+				}*/
 
+				dst[x    ] = (unsigned char)vtmp[0];		//new pixel
+				dst[x + 1] = (unsigned char)vtmp[1];
+				dst[x + 2] = (unsigned char)vtmp[2];
+				dst[x + 3] = (unsigned char)vtmp[3];
+
+				dc[x + 1] += qerror[0] * floydst[0];		//current
+				dc[x + 2] += qerror[1] * floydst[0];
+				dc[x + 3] += qerror[2] * floydst[0];
+				dc[x + 4] += qerror[3] * floydst[0];		//next loop first
+
+				dn[x - 1] += qerror[0] * floydst[1];
+
+				dn[x] += qerror[0] * floydst[2];
+				dn[x] += qerror[1] * floydst[1];
+
+				dn[x + 1] += qerror[0] * floydst[3];
+				dn[x + 1] += qerror[1] * floydst[2];
+				dn[x + 1] += qerror[2] * floydst[1];
+
+				dn[x + 2] += qerror[1] * floydst[3];
+				dn[x + 2] += qerror[2] * floydst[2];
+				dn[x + 2] += qerror[3] * floydst[1];
+
+				dn[x + 3] += qerror[2] * floydst[3];
+				dn[x + 3] += qerror[3] * floydst[2];
+
+				dn[x + 4] += qerror[3] * floydst[3];
 
 			}
 
-			for (; x < src_width-1; x++)
+			for (; x < src_width; x++)
 			{
+				int v;
 				float qerror;
 
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dc[x + 1] += qerror * floydst[0];
-				dn[x - 1] += qerror * floydst[1];
-				dn[x    ] += qerror * floydst[2];
-				dn[x + 1] += qerror * floydst[3];
-			}
-
-			//x=src_width-1;
-			{
-				float qerror;
-
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0.0f), 255.0f);
+				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
 				dst[x]=(unsigned char)v;
 				qerror = p[x] - v;
 				dn[x - 1] += qerror * floydst[1];
 				dn[x    ] += qerror * floydst[2];
+				//if (x != src_width - 1)
+				//{
+					dc[x + 1] += qerror * floydst[0];
+					dn[x + 1] += qerror * floydst[3];
+				//}
 			}
+
+
 		}
 		//opt code end
 
 
-		p += width;
-		dst += dst_pitch;
-		float *tn = dn;
+		p += width;			//元画素ポインタ++
+		dst += dst_pitch;	//変更後ポインタ++
+		float *tn = dn;		//dnとdcの領域を入れ替え
 		dn = dc;
 		dc = tn;
 	}
 	free(dither);
 }
 
+
+void dither_MT(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width, const int mode)
+{	//マルチスレッド化 mode>=1
+#pragma omp parallel
+#pragma omp sections
+	{
+#pragma omp section
+		{
+			const int ys=src_height/4*0;
+			const int ye=src_height/4*1;
+			const float *p0 = p + ys*width;
+			unsigned char * dst0 = dst + ys*dst_pitch;
+
+			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+		}
+#pragma omp section
+		{
+			const int ys=src_height/4*1;
+			const int ye=src_height/4*2;
+			const float *p0 = p + ys*width;
+			unsigned char * dst0 = dst + ys*dst_pitch;
+
+			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width,mode,  ys, ye);
+			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+		}
+
+#pragma omp section
+		{
+			const int ys=src_height/4*2;
+			const int ye=src_height/4*3;
+			const float *p0 = p + ys*width;
+			unsigned char * dst0 = dst + ys*dst_pitch;
+
+			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+		}
+
+#pragma omp section
+		{
+			const int ys=src_height/4*3;
+			const int ye=src_height;
+			const float *p0 = p + ys*width;
+			unsigned char * dst0 = dst + ys*dst_pitch;
+
+			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
+		}
+	}
+}
+
+void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, int ys, int ye)
+{
+
+	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+
+	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));	//width±1にアクセスするので前後に1ずつ伸ばしておく
+	float *dc = dither + 1;
+	float *dn = dc + width +1;	//-1にアクセスするのでポインタは1足しておく
+
+	memset(dc, 0, width * sizeof(float));
+
+
+	for (int y = ys; y<ye; y++)
+	{
+		float qerror[4];
+		int x;
+
+		memset(dn, 0, width * sizeof(float));
+
+		for (x = 0; x < src_width-3; x+=4)
+		{
+			int vtmp[4];
+			float vtmp2[4];
+			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
+
+			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+
+			vtmp2[1] += qerror[0] * floydst[0];
+			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
+			qerror[1] = p[x + 1] - vtmp[1];
+
+			vtmp2[2] += qerror[1] * floydst[0];
+			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
+			qerror[2] = p[x + 2] - vtmp[2];
+
+			vtmp2[3] += qerror[2] * floydst[0];
+			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
+			qerror[3] = p[x + 3] - vtmp[3];
+
+
+			/*for (int ii = 0; ii < 4; ii++) {
+			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
+			dc[x + ii + 1] += qerror[ii] * floydst[0];
+
+			dn[x + ii - 1] += qerror[ii] * floydst[1];
+			dn[x + ii]     += qerror[ii] * floydst[2];
+			dn[x + ii + 1] += qerror[ii] * floydst[3];
+			}*/
+			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
+			dst[x + 1] = (unsigned char)vtmp[1];
+			dst[x + 2] = (unsigned char)vtmp[2];
+			dst[x + 3] = (unsigned char)vtmp[3];
+
+			dc[x + 1] += qerror[0] * floydst[0];		//current
+			dc[x + 2] += qerror[1] * floydst[0];
+			dc[x + 3] += qerror[2] * floydst[0];
+			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
+
+			dn[x - 1] += qerror[0] * floydst[1];
+
+			dn[x] += qerror[0] * floydst[2];
+			dn[x] += qerror[1] * floydst[1];
+
+			dn[x + 1] += qerror[0] * floydst[3];
+			dn[x + 1] += qerror[1] * floydst[2];
+			dn[x + 1] += qerror[2] * floydst[1];
+
+			dn[x + 2] += qerror[1] * floydst[3];
+			dn[x + 2] += qerror[2] * floydst[2];
+			dn[x + 2] += qerror[3] * floydst[1];
+
+			dn[x + 3] += qerror[2] * floydst[3];
+			dn[x + 3] += qerror[3] * floydst[2];
+
+			dn[x + 4] += qerror[3] * floydst[3];
+
+		}
+		for (; x < src_width; x++)
+		{
+			int v;
+			float qerror;
+
+			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
+			dst[x]=(unsigned char)v;
+			qerror = p[x] - v;
+			dn[x - 1] += qerror * floydst[1];
+			dn[x    ] += qerror * floydst[2];
+			//if (x != src_width - 1)				//width+1まで配列は確保してある
+			//{
+			dc[x + 1] += qerror * floydst[0];
+			dn[x + 1] += qerror * floydst[3];
+			//}
+		}
+
+		p += width;
+		dst += dst_pitch;
+		float *tn = dn;
+		dn = dc;
+		dc = tn;
+
+	}
+	free(dither);
+
+}
+
+void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode,  int ys, int ye)
+{
+
+	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+	const float scale = (mode-1) + 0.5f;
+	const float off = scale*0.5f - 0.5f;
+
+	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));	//width±1にアクセスするので前後に1ずつ伸ばしておく
+	float *dc = dither + 1;
+	float *dn = dc + width +1;	//-1にアクセスするのでポインタは1足しておく
+
+	MTRand mtr;
+
+	memset(dc, 0, width * sizeof(float));
+
+	for (int y = ys; y<ye; y++)
+	{
+		float qerror[4];
+		int x;
+
+		memset(dn, 0, width * sizeof(float));
+
+		for (x = 0; x < src_width-3; x+=4)
+		{
+			int vtmp[4];
+			float vtmp2[4];
+			float rand[4];
+
+			for (int ii=0;ii<4;ii++){rand[ii]=mtr.randf()*scale;}
+			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + rand[ii] - off;}
+
+			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+
+			vtmp2[1] += qerror[0] * floydst[0];
+			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
+			qerror[1] = p[x + 1] - vtmp[1];
+
+			vtmp2[2] += qerror[1] * floydst[0];
+			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
+			qerror[2] = p[x + 2] - vtmp[2];
+
+			vtmp2[3] += qerror[2] * floydst[0];
+			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
+			qerror[3] = p[x + 3] - vtmp[3];
+
+
+			/*for (int ii = 0; ii < 4; ii++) {
+			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
+			dc[x + ii + 1] += qerror[ii] * floydst[0];
+
+			dn[x + ii - 1] += qerror[ii] * floydst[1];
+			dn[x + ii]     += qerror[ii] * floydst[2];
+			dn[x + ii + 1] += qerror[ii] * floydst[3];
+			}*/
+			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
+			dst[x + 1] = (unsigned char)vtmp[1];
+			dst[x + 2] = (unsigned char)vtmp[2];
+			dst[x + 3] = (unsigned char)vtmp[3];
+
+			dc[x + 1] += qerror[0] * floydst[0];		//current
+			dc[x + 2] += qerror[1] * floydst[0];
+			dc[x + 3] += qerror[2] * floydst[0];
+			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
+
+			dn[x - 1] += qerror[0] * floydst[1];
+
+			dn[x] += qerror[0] * floydst[2];
+			dn[x] += qerror[1] * floydst[1];
+
+			dn[x + 1] += qerror[0] * floydst[3];
+			dn[x + 1] += qerror[1] * floydst[2];
+			dn[x + 1] += qerror[2] * floydst[1];
+
+			dn[x + 2] += qerror[1] * floydst[3];
+			dn[x + 2] += qerror[2] * floydst[2];
+			dn[x + 2] += qerror[3] * floydst[1];
+
+			dn[x + 3] += qerror[2] * floydst[3];
+			dn[x + 3] += qerror[3] * floydst[2];
+
+			dn[x + 4] += qerror[3] * floydst[3];
+
+		}
+		for (; x < src_width; x++)
+		{
+			int v;
+			float qerror;
+
+			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
+			dst[x]=(unsigned char)v;
+			qerror = p[x] - v;
+			dn[x - 1] += qerror * floydst[1];
+			dn[x    ] += qerror * floydst[2];
+			//if (x != src_width - 1)				//width+1まで配列は確保してある
+			//{
+			dc[x + 1] += qerror * floydst[0];
+			dn[x + 1] += qerror * floydst[3];
+			//}
+		}
+
+		p += width;
+		dst += dst_pitch;
+		float *tn = dn;
+		dn = dc;
+		dc = tn;
+
+	}
+	free(dither);
+
+}
 
 void intcast_SSE_1(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width)
@@ -1087,10 +1272,12 @@ void dfttest::conv_result_plane_to_int (int width, int height, int b, int ebuff_
 	}
 	else
 	{
-		if (dither == 1)
-			dither1_C(ebp,dstp,src_height,src_width,dst_pitch,width,dither);
+		if (dither == 101)
+			dither1_C(ebp,dstp,src_height,src_width,dst_pitch,width,1);
+		else if (dither>101)
+			dither_C(ebp,dstp,src_height,src_width,dst_pitch,width,dither-100);	//for debug only 正規コードでは消すこと
 		else if (dither)
-			dither_C(ebp, dstp, src_height, src_width, dst_pitch, width, dither);
+			dither_MT(ebp,dstp,src_height,src_width,dst_pitch,width,dither);
 		else if (!(src_width&7) && (((cpuflags&CPUF_SSE2) && opt == 0) || opt == 3))
 			intcast_SSE2_8(ebp,dstp,src_height,src_width,dst_pitch,width);
 		else if (((cpuflags&CPUF_SSE) && opt == 0) || opt > 1)
@@ -1835,7 +2022,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		env->ThrowError("dfttest:  threads must be between 0 and 16 (inclusive)!");
 	if (opt < 0 || opt > 3)
 		env->ThrowError("dfttest:  opt must be set to 0, 1, 2, or 3!");
-	if (dither < 0 || dither > 100)
+	if (dither < 0 || dither > 104)
 		env->ThrowError("dfttest:  invalid dither value!\n");
 	if (threads == 0)
 		threads = num_processors();
@@ -2065,7 +2252,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			}
 		}
 		if (((env->GetCPUFlags()&CPUF_SSE2) && opt == 0) || opt == 3)
-		{
+		{	//SSE2の時
 			if (!(sbsize&7))
 			{
 				pssInfo[i]->proc0 = proc0_SSE2_8;
@@ -2081,8 +2268,8 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
 			}
-			pssInfo[i]->removeMean = removeMean_C;//removeMean_SSE; ベクトル化すると大体同じ速度が出る
-			pssInfo[i]->addMean = addMean_C;//addMean_SSE; ベクトル化すると大体同じ速度が出る
+			pssInfo[i]->removeMean = removeMean_SSE;//実はコンパイラのベクトル化でも近い速度が出る
+			pssInfo[i]->addMean = addMean_SSE;		//実はコンパイラのベクトル化でも近い速度が出る
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f)
@@ -2098,7 +2285,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			else pssInfo[i]->filterCoeffs = filter_4_SSE;
 		}
 		else if (((env->GetCPUFlags()&CPUF_SSE) && opt == 0) || opt == 2)
-		{
+		{	//SSEの時
 			if (!(sbsize&7))
 			{
 				pssInfo[i]->proc0 = proc0_SSE_8;
@@ -2114,8 +2301,8 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
 			}
-			pssInfo[i]->removeMean = removeMean_C;
-			pssInfo[i]->addMean = addMean_C;
+			pssInfo[i]->removeMean = removeMean_SSE;
+			pssInfo[i]->addMean = addMean_SSE;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f) 
@@ -2131,7 +2318,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			else pssInfo[i]->filterCoeffs = filter_4_SSE;
 		}
 		else
-		{
+		{	//無効
 			pssInfo[i]->proc0 = proc0_C;
 			pssInfo[i]->proc1 = proc1_C;
 			pssInfo[i]->removeMean = removeMean_C;
