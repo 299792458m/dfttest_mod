@@ -1,9 +1,9 @@
 /*
-**                    dfttest v1.9.4 for Avisynth 2.5.x
+**                    dfttest v1.9.4.3 for Avisynth+
 **
 **   2D/3D frequency domain denoiser.
 **
-**   Copyright (C) 2007-2010 Kevin Stone
+**   Copyright (C) 2007-2010 Kevin Stone, 2017 (C) DJATOM
 **
 **   This program is free software; you can redistribute it and/or modify
 **   it under the terms of the GNU General Public License as published by
@@ -22,6 +22,20 @@
 
 /*
 Modifications:
+2018.10.14 - DJATOM
+     - Fixed one nasty bug, causing crash on non-AVX CPUs.
+
+2017.09.04 - DJATOM
+     - Adaptive MT mode: MT_MULTI_INSTANCE for threads=1 and MT_SERIALIZED for > 1 internal 
+	 - Compilation: silence #693 for Intel Compiler
+
+2017.08.14 - DJATOM
+	Changes from 1.9.4:
+	 - x64 ready: ported almost all inline asm to intrinsics (dropped some SSE functions, we're in 2017 now). 
+	 - AddMean and RemoveMean got their AVX codepaths.
+	 - PlanarFrame updated from JPSDR's NNEDI3 repo (x64 friendly, HBD ready).
+	 - proc0_16 got SSE2 codepath (I can see noticeable speed-up against old version).
+	 - opt parameter change: 2 - SSE/SSE2, 3 - SSE/SSE2/AVX codepath is used.
 
 2009.12.25 - Firesledge
 	Added the bool "lsb" parameter. It outputs 16-bit pixel components by
@@ -51,9 +65,14 @@ Modifications:
 	Compatible with the new Avisynth 2.6 colorspaces, excepted Y8.
 */
 
-#include "dfttest.h"
+#ifdef __INTEL_COMPILER
+#pragma warning(disable : 693) 
+#endif
+#pragma warning(disable : 4305)
 
-#include	<cassert>
+#include "dfttest.h"
+#include "dfttest_avx.h"
+#include <cassert>
 
 PVideoFrame __stdcall dfttest::GetFrame(int n, IScriptEnvironment *env)
 {
@@ -92,147 +111,77 @@ void proc0_C(const unsigned char *s0, const float *s1, float *d,
 	}
 }
 
-void proc0_SSE_4(const unsigned char *s0, const float *s1, float *d,
-	const int p0, const int p1, const int /*offset_lsb*/)
-{
-	__asm
-	{
-		mov esi,s0
-		mov edi,s1
-		mov edx,d
-		mov eax,p1
-		pxor mm7,mm7
-uloop:
-		mov ecx,p1
-		xor ebx,ebx
-vloop:
-		movd mm0,[esi+ebx]
-		punpcklbw mm0,mm7
-		movq mm1,mm0
-		punpcklbw mm0,mm7
-		punpckhbw mm1,mm7
-		cvtpi2ps xmm0,mm0
-		cvtpi2ps xmm1,mm1
-		shufps xmm0,xmm1,68
-		mulps xmm0,[edi+ebx*4]
-		movaps [edx+ebx*4],xmm0
-		add ebx,4
-		sub ecx,4
-		jnz vloop
-		add esi,p0
-		mov ecx,p1
-		lea edi,[edi+ecx*4]
-		lea edx,[edx+ecx*4]
-		sub eax,1
-		jnz uloop
-		emms
-	}
-}
-
 void proc0_SSE2_4(const unsigned char *s0, const float *s1, float *d,
 	const int p0, const int p1, const int /*offset_lsb*/)
 {
-	__asm
+	auto zero = _mm_setzero_si128();
+	for (int u = 0; u<p1; ++u)
 	{
-		mov esi,s0
-		mov edi,s1
-		mov edx,d
-		mov eax,p1
-		pxor xmm7,xmm7
-uloop:
-		mov ecx,p1
-		xor ebx,ebx
-vloop:
-		movd xmm0,[esi+ebx]
-		punpcklbw xmm0,xmm7
-		punpcklbw xmm0,xmm7
-		cvtdq2ps xmm0,xmm0
-		mulps xmm0,[edi+ebx*4]
-		movaps [edx+ebx*4],xmm0
-		add ebx,4
-		sub ecx,4
-		jnz vloop
-		add esi,p0
-		mov ecx,p1
-		lea edi,[edi+ecx*4]
-		lea edx,[edx+ecx*4]
-		sub eax,1
-		jnz uloop
-	}
-}
-
-void proc0_SSE_8(const unsigned char *s0, const float *s1, float *d,
-	const int p0, const int p1, const int /*offset_lsb*/)
-{
-	__asm
-	{
-		mov esi,s0
-		mov edi,s1
-		mov edx,d
-		mov eax,p1
-		pxor mm7,mm7
-uloop:
-		mov ecx,p1
-		xor ebx,ebx
-vloop:
-		movq mm0,[esi+ebx]
-		movq mm2,mm0
-		punpcklbw mm0,mm7
-		punpckhbw mm2,mm7
-		movq mm1,mm0
-		movq mm3,mm2
-		punpcklbw mm0,mm7
-		punpckhbw mm1,mm7
-		punpcklbw mm2,mm7
-		punpckhbw mm3,mm7
-		cvtpi2ps xmm0,mm0
-		cvtpi2ps xmm1,mm1
-		cvtpi2ps xmm2,mm2
-		cvtpi2ps xmm3,mm3
-		shufps xmm0,xmm1,68
-		shufps xmm2,xmm3,68
-		mulps xmm0,[edi+ebx*4]
-		mulps xmm2,[edi+ebx*4+16]
-		movaps [edx+ebx*4],xmm0
-		movaps [edx+ebx*4+16],xmm2
-		add ebx,8
-		sub ecx,8
-		jnz vloop
-		add esi,p0
-		mov ecx,p1
-		lea edi,[edi+ecx*4]
-		lea edx,[edx+ecx*4]
-		sub eax,1
-		jnz uloop
-		emms
+		for (int v = 0; v < p1; v += 4)
+		{
+			/* Intel's compiller works fine with aligned versions, MS randomly crashing */
+			auto s0_load = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s0 + v));
+			auto s0_unp_lo1 = _mm_unpacklo_epi8(s0_load, zero);
+			auto s0_unp_lo2 = _mm_unpacklo_epi8(s0_unp_lo1, zero);
+			auto s0_loop = _mm_cvtepi32_ps(s0_unp_lo2);
+			auto s1_loop = _mm_loadu_ps(s1 + v);
+			auto d_reslt = _mm_mul_ps(s0_loop, s1_loop);
+			_mm_storeu_ps(d + v, d_reslt);
+		}
+		s0 += p0;
+		s1 += p1;
+		d += p1;
 	}
 }
 
 void proc0_SSE2_8(const unsigned char *s0, const float *s1, float *d,
 	const int p0, const int p1, const int /*offset_lsb*/)
 {
-	__asm
+#if defined (_WIN64)
+	auto zero = _mm_setzero_si128();
+	for (int u = 0; u<p1; ++u)
+	{
+		for (int v = 0; v < p1; v += 8)
+		{
+			auto s0_load = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s0 + v));
+			auto s0_u_lo1 = _mm_unpacklo_epi8(s0_load, zero);
+			auto s0_u_lo2 = _mm_unpacklo_epi8(s0_u_lo1, zero);
+			auto s0_u_hi2 = _mm_unpackhi_epi8(s0_u_lo1, zero);
+			auto s0_loop_lo = _mm_cvtepi32_ps(s0_u_lo2);
+			auto s0_loop_hi = _mm_cvtepi32_ps(s0_u_hi2);
+			auto s1_loop_lo = _mm_loadu_ps(s1 + v);
+			auto s1_loop_hi = _mm_loadu_ps(s1 + v + 4);
+			auto d_result1 = _mm_mul_ps(s0_loop_lo, s1_loop_lo);
+			auto d_result2 = _mm_mul_ps(s0_loop_hi, s1_loop_hi);
+			_mm_storeu_ps(d + v, d_result1);
+			_mm_storeu_ps(d + v + 4, d_result2);
+		}
+		s0 += p0;
+		s1 += p1;
+		d += p1;
+	}
+#else
+		__asm
 	{
 		mov esi,s0
 		mov edi,s1
 		mov edx,d
 		mov eax,p1
-		pxor xmm7,xmm7
 uloop:
 		mov ecx,p1
 		xor ebx,ebx
 vloop:
-		movq xmm0,QWORD PTR[esi+ebx]
-		punpcklbw xmm0,xmm7
-		movdqa xmm1,xmm0
-		punpcklbw xmm0,xmm7
-		punpckhbw xmm1,xmm7
-		cvtdq2ps xmm0,xmm0
-		cvtdq2ps xmm1,xmm1
+		movq xmm0,QWORD PTR[esi+ebx]	//下位64bit=8個分しか使わない
+		pshufd xmm1,xmm0,1				//d32-63をd0-に持ってきたいだけだけど分かりにくい？
+		pmovzxbd xmm0,xmm0				//8bit*4→32*4に拡張
+		pmovzxbd xmm1,xmm1				//8bit*4→32*4に拡張
+		cvtdq2ps xmm0,xmm0				//int→float変換
+		cvtdq2ps xmm1,xmm1				//int→float変換
+
 		mulps xmm0,[edi+ebx*4]
 		mulps xmm1,[edi+ebx*4+16]
-		movaps [edx+ebx*4],xmm0
-		movaps [edx+ebx*4+16],xmm1
+		movups [edx+ebx*4],xmm0
+		movups [edx+ebx*4+16],xmm1
 		add ebx,8
 		sub ecx,8
 		jnz vloop
@@ -243,6 +192,7 @@ vloop:
 		sub eax,1
 		jnz uloop
 	}
+#endif
 }
 
 void proc0_16_C(const unsigned char *s0, const float *s1, float *d,
@@ -263,6 +213,34 @@ void proc0_16_C(const unsigned char *s0, const float *s1, float *d,
 	}
 }
 
+void proc0_16_SSE2(const unsigned char *s0, const float *s1, float *d,
+	const int p0, const int p1, const int offset_lsb)
+{
+	auto zero = _mm_setzero_si128();
+	auto round = _mm_set_ps1(1.0f / 256);
+	for (int u = 0; u < p1; ++u)
+	{
+		for (int v = 0; v < p1; v += 4)
+		{
+			auto msb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s0 + v));
+			auto lsb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s0 + v + offset_lsb));
+			auto int_lo = _mm_unpacklo_epi8(lsb, msb);
+			auto int_hi = _mm_unpackhi_epi8(lsb, msb);
+			auto shift = _mm_unpacklo_epi8(_mm_slli_epi16(int_hi, 8), zero);
+			auto add = _mm_add_epi16(shift, int_lo);
+			auto s0_loop_i = _mm_unpacklo_epi16(add, zero);
+			auto s0_loop = _mm_cvtepi32_ps(s0_loop_i);
+			auto s1_loop = _mm_loadu_ps(s1 + v);
+			auto d_result = _mm_mul_ps(s0_loop, s1_loop);
+			d_result = _mm_mul_ps(d_result, round);
+			_mm_storeu_ps(d + v, d_result);
+		}
+		s0 += p0;
+		s1 += p1;
+		d += p1;
+	}
+}
+
 void proc1_C(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
@@ -279,70 +257,89 @@ void proc1_C(const float *s0, const float *s1, float *d,
 void proc1_SSE_4(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
-	__asm
+	auto zero = _mm_setzero_si128();
+	for (int u = 0; u<p0; ++u)
 	{
-		mov esi,s0
-		mov edi,s1
-		mov edx,d
-		mov eax,p0
-uloop:
-		mov ecx,p0
-		xor ebx,ebx
-vloop:
-		movaps xmm0,[esi+ebx*4]
-		mulps xmm0,[edi+ebx*4]
-		movups xmm1,[edx+ebx*4]
-		addps xmm0,xmm1
-		movups [edx+ebx*4],xmm0
-		add ebx,4
-		sub ecx,4
-		jnz vloop
-		mov ecx,p0
-		lea esi,[esi+ecx*4]
-		lea edi,[edi+ecx*4]
-		mov ecx,p1
-		lea edx,[edx+ecx*4]
-		sub eax,1
-		jnz uloop
+		for (int v = 0; v<p0; v += 4)
+		{
+			auto s0_loop = _mm_loadu_ps(s0 + v);
+			auto s1_loop = _mm_loadu_ps(s1 + v);
+			auto d_loop = _mm_loadu_ps(d + v);
+			auto d_mul = _mm_mul_ps(s0_loop, s1_loop);
+			auto d_reslt = _mm_add_ps(d_loop, d_mul);
+			_mm_storeu_ps(d + v, d_reslt);
+		}
+		s0 += p0;
+		s1 += p0;
+		d += p1;
 	}
 }
 
 void proc1_SSE_8(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
+#if defined (_WIN64)
+	for (int u = 0; u<p0; u++)
+	{
+		for (int v = 0; v < p0; v += 8)
+		{
+			auto xmm0 = _mm_loadu_ps(s0 + v);
+			auto xmm1 = _mm_loadu_ps(s0 + v + 4);
+			auto xmm2 = _mm_loadu_ps(s1 + v);
+			auto xmm3 = _mm_loadu_ps(s1 + v + 4);
+			auto xmm4 = _mm_loadu_ps(d + v);
+			auto xmm5 = _mm_loadu_ps(d + v + 4);
+
+			xmm0 = _mm_mul_ps(xmm0, xmm2);
+			xmm1 = _mm_mul_ps(xmm1, xmm3);
+			xmm0 = _mm_add_ps(xmm0, xmm4);
+			xmm1 = _mm_add_ps(xmm1, xmm5);
+			//xmm0 = _mm_fmadd_ps(xmm0, xmm2, xmm4);		//FMA3(AVX)が使えるときはこれでも可
+			//xmm1 = _mm_fmadd_ps(xmm1, xmm3, xmm5);
+			_mm_storeu_ps(d + v, xmm0);
+			_mm_storeu_ps(d + v + 4, xmm1);
+		}
+		s0 += p0;
+		s1 += p0;
+		d += p1;
+	}
+#else
 	__asm
 	{
 		mov esi,s0
 		mov edi,s1
 		mov edx,d
 		mov eax,p0
-uloop:
+	uloop:
 		mov ecx,p0
 		xor ebx,ebx
-vloop:
-		movaps xmm0,[esi+ebx*4]
-		movaps xmm1,[esi+ebx*4+16]
-		movups xmm2,[edx+ebx*4]
-		movups xmm3,[edx+ebx*4+16]
-		mulps xmm0, [edi+ebx*4]
+	vloop:
+		movups xmm0,[esi+ebx]
+		movups xmm1,[esi+ebx+16]
+		movups xmm2,[edx+ebx]
+		movups xmm3,[edx+ebx+16]
+
+		mulps xmm0, [edi+ebx]
+		mulps xmm1, [edi+ebx+16]
 		addps xmm0,xmm2
-		//vfmadd132ps xmm0,xmm2, [edi+ebx*4]
-		mulps xmm1,[edi+ebx*4+16]
 		addps xmm1,xmm3
-		//vfmadd132ps xmm1, xmm3, [edi+ebx*4+16]
-		movups [edx+ebx*4],xmm0
-		movups [edx+ebx*4+16],xmm1
-		add ebx,8
+		//vfmadd132ps xmm0, xmm2, [edi+ebx]	//FMA3(AVX)が使えるなら2命令を1つにできるがあまり効果なし？
+		//vfmadd132ps xmm1, xmm3, [edi+ebx+16]
+
+		movups [edx+ebx],xmm0
+		movups [edx+ebx+16],xmm1
+		add ebx,32
 		sub ecx,8
-		jnz vloop
+		jg vloop
 		mov ecx,p0
 		lea esi,[esi+ecx*4]
 		lea edi,[edi+ecx*4]
 		mov ecx,p1
 		lea edx,[edx+ecx*4]
 		sub eax,1
-		jnz uloop
+		jg uloop
 	}
+#endif
 }
 
 inline bool writeOk(const int *a, const int nthreads, const int x, const int y, 
@@ -560,15 +557,7 @@ void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_ls
 		{
 			const float		vf = p [x] * 256;
 			int				v;
-#if ! defined (_WIN64)
-			__asm
-			{
-				fld				vf
-				fistp				v
-			}
-#else
 			v = int (vf + 0.5f);
-#endif
 			v = min (max (v, 0), 65535);
 			dst [x] = static_cast <unsigned char> (v >> 8);
 			dst_lsb [x] = static_cast <unsigned char> (v);
@@ -583,8 +572,73 @@ void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_ls
 
 void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
-{	//元のコード
-	float *dither = (float*)malloc(2*width*sizeof(float));
+{
+	if (mode<100){
+		if (mode==1) dither1_C_sub(p, dst, src_width, dst_pitch, width, mode, 0, src_height);
+		else dither_C_sub(p, dst, src_width, dst_pitch, width, mode, 0, src_height);
+	}
+	else if (mode<200){
+		//縦に4分割でマルチスレッド化 元と演算結果は異なる(分割区間ごとにフロイド・スタインバーグがかかるので)
+		//ditherが律速になる場合向け threads=1にしてavisynth側でMTで走らせる場合には不要・・・
+		int mode2=mode-100;
+#pragma omp parallel
+#pragma omp sections
+		{
+#pragma omp section
+			{
+				const int ys=src_height/4*0;
+				const int ye=src_height/4*1;
+				const float *p0 = p + ys*width;
+				unsigned char * dst0 = dst + ys*dst_pitch;
+
+				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+			}
+#pragma omp section
+			{
+				const int ys=src_height/4*1;
+				const int ye=src_height/4*2;
+				const float *p0 = p + ys*width;
+				unsigned char * dst0 = dst + ys*dst_pitch;
+
+				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width,mode2,  ys, ye);
+				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+			}
+
+#pragma omp section
+			{
+				const int ys=src_height/4*2;
+				const int ye=src_height/4*3;
+				const float *p0 = p + ys*width;
+				unsigned char * dst0 = dst + ys*dst_pitch;
+
+				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+			}
+
+#pragma omp section
+			{
+				const int ys=src_height/4*3;
+				const int ye=src_height;
+				const float *p0 = p + ys*width;
+				unsigned char * dst0 = dst + ys*dst_pitch;
+
+				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+			}
+		}
+	}
+	else if (mode<300){
+		//オリジナルのコード
+		int mode2=mode-200;
+		dither_C_sub0(p, dst, src_height, src_width, dst_pitch, width, mode2);
+	}
+}
+
+void dither_C_sub0(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width, const int mode)
+{
+	float *dither = (float*)_aligned_malloc(2*width*sizeof(float),ALIGN_SIZE);
 	float *dc = dither;
 	float *dn = dither+width;
 	const float scale = (mode-1)+0.5f;
@@ -616,199 +670,294 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 		dn = dc;
 		dc = tn;
 	}
-	free(dither);
+	_aligned_free(dither);
 }
 
-void dither1_C(const float *p, unsigned char *dst, const int src_height,
-	const int src_width, const int dst_pitch, const int width, const int mode)
-{	//シングルスレッド最適化 mode==1
-
-	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));
-	float *dc = dither+1;	//配列の前後±1にアクセスするため
-	float *dn = dc + width +1;	//__declspec(align(16))
-	memset(dc, 0, width * sizeof(float));
-	
-
-	for (int y = 0; y<src_height; ++y)
-	{
-		memset(dn, 0, width * sizeof(float));
-		{
-
-			const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
-
-			int x;
-
-
-			for (x=0; x < src_width - 3; x += 4)
-			{
-
-				float qerror[4];
-
-				int vtmp[4];
-				float vtmp2[4];
-				for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
-
-				vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-				qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
-
-				vtmp2[1] += qerror[0] * floydst[0];
-				vtmp[1] = min(max((int)vtmp2[1], 0), 255);
-				qerror[1] = p[x + 1] - vtmp[1];
-
-				vtmp2[2] += qerror[1] * floydst[0];
-				vtmp[2] = min(max((int)vtmp2[2], 0), 255);
-				qerror[2] = p[x + 2] - vtmp[2];
-
-				vtmp2[3] += qerror[2] * floydst[0];
-				vtmp[3] = min(max((int)vtmp2[3], 0), 255);
-				qerror[3] = p[x + 3] - vtmp[3];
-
-				/*for (int ii = 0; ii < 4; ii++) {
-					dst[x+ ii] = (unsigned char)vtmp[i];		//new pixel
-
-					dc[x + ii + 1] += qerror[ii] * floydst[0];
-
-					dn[x + ii - 1] += qerror[ii] * floydst[1];
-					dn[x + ii]     += qerror[ii] * floydst[2];
-					dn[x + ii + 1] += qerror[ii] * floydst[3];
-				}*/
-
-				dst[x    ] = (unsigned char)vtmp[0];		//new pixel
-				dst[x + 1] = (unsigned char)vtmp[1];
-				dst[x + 2] = (unsigned char)vtmp[2];
-				dst[x + 3] = (unsigned char)vtmp[3];
-
-				dc[x + 1] += qerror[0] * floydst[0];		//current
-				dc[x + 2] += qerror[1] * floydst[0];
-				dc[x + 3] += qerror[2] * floydst[0];
-				dc[x + 4] += qerror[3] * floydst[0];		//next loop first
-
-				dn[x - 1] += qerror[0] * floydst[1];
-
-				dn[x] += qerror[0] * floydst[2];
-				dn[x] += qerror[1] * floydst[1];
-
-				dn[x + 1] += qerror[0] * floydst[3];
-				dn[x + 1] += qerror[1] * floydst[2];
-				dn[x + 1] += qerror[2] * floydst[1];
-
-				dn[x + 2] += qerror[1] * floydst[3];
-				dn[x + 2] += qerror[2] * floydst[2];
-				dn[x + 2] += qerror[3] * floydst[1];
-
-				dn[x + 3] += qerror[2] * floydst[3];
-				dn[x + 3] += qerror[3] * floydst[2];
-
-				dn[x + 4] += qerror[3] * floydst[3];
-
-			}
-
-			for (; x < src_width; x++)
-			{
-				int v;
-				float qerror;
-
-				v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
-				dst[x]=(unsigned char)v;
-				qerror = p[x] - v;
-				dn[x - 1] += qerror * floydst[1];
-				dn[x    ] += qerror * floydst[2];
-				//if (x != src_width - 1)
-				//{
-					dc[x + 1] += qerror * floydst[0];
-					dn[x + 1] += qerror * floydst[3];
-				//}
-			}
-
-
-		}
-		//opt code end
-
-
-		p += width;			//元画素ポインタ++
-		dst += dst_pitch;	//変更後ポインタ++
-		float *tn = dn;		//dnとdcの領域を入れ替え
-		dn = dc;
-		dc = tn;
-	}
-	free(dither);
-}
-
-
-void dither_MT(const float *p, unsigned char *dst, const int src_height,
-	const int src_width, const int dst_pitch, const int width, const int mode)
-{	//マルチスレッド化 mode>=1
-#pragma omp parallel
-#pragma omp sections
-	{
-#pragma omp section
-		{
-			const int ys=src_height/4*0;
-			const int ye=src_height/4*1;
-			const float *p0 = p + ys*width;
-			unsigned char * dst0 = dst + ys*dst_pitch;
-
-			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-		}
-#pragma omp section
-		{
-			const int ys=src_height/4*1;
-			const int ye=src_height/4*2;
-			const float *p0 = p + ys*width;
-			unsigned char * dst0 = dst + ys*dst_pitch;
-
-			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width,mode,  ys, ye);
-			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-		}
-
-#pragma omp section
-		{
-			const int ys=src_height/4*2;
-			const int ye=src_height/4*3;
-			const float *p0 = p + ys*width;
-			unsigned char * dst0 = dst + ys*dst_pitch;
-
-			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-		}
-
-#pragma omp section
-		{
-			const int ys=src_height/4*3;
-			const int ye=src_height;
-			const float *p0 = p + ys*width;
-			unsigned char * dst0 = dst + ys*dst_pitch;
-
-			if (mode==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-			else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode, ys, ye);
-		}
-	}
-}
-
-void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, int ys, int ye)
+void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
 {
 
 	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+	const float scale = (mode-1) + 0.5f;
+	const float off = scale*0.5f - 0.5f;
 
-	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));	//width±1にアクセスするので前後に1ずつ伸ばしておく
-	float *dc = dither + 1;
-	float *dn = dc + width +1;	//-1にアクセスするのでポインタは1足しておく
+	float *dither = (float*)_aligned_malloc(2 * (width+8) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+	float *dc = dither + 4;
+	float *dn = dc + width +4;	//-1にアクセスするのでポインタは足しておく
 
-	memset(dc, 0, width * sizeof(float));
+	MTRand mtr;
 
+	ZeroMemory(dc-4, (width+8) * sizeof(float));
 
 	for (int y = ys; y<ye; y++)
 	{
-		float qerror[4];
 		int x;
 
-		memset(dn, 0, width * sizeof(float));
+		ZeroMemory(dn-4, (width+8) * sizeof(float));
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
 			int vtmp[4];
 			float vtmp2[4];
+			float qerror[4];
+
+			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + mtr.randf()*scale - off;}
+
+			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+
+			vtmp2[1] += qerror[0] * floydst[0];
+			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
+			qerror[1] = p[x + 1] - vtmp[1];
+
+			vtmp2[2] += qerror[1] * floydst[0];
+			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
+			qerror[2] = p[x + 2] - vtmp[2];
+
+			vtmp2[3] += qerror[2] * floydst[0];
+			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
+			qerror[3] = p[x + 3] - vtmp[3];
+
+
+			/*
+			for (int ii = 0; ii < 4; ii++) {
+			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
+			dc[x + ii + 1] += qerror[ii] * floydst[0];
+
+			dn[x + ii - 1] += qerror[ii] * floydst[1];
+			dn[x + ii]     += qerror[ii] * floydst[2];
+			dn[x + ii + 1] += qerror[ii] * floydst[3];
+			}
+			*/
+			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
+			dst[x + 1] = (unsigned char)vtmp[1];
+			dst[x + 2] = (unsigned char)vtmp[2];
+			dst[x + 3] = (unsigned char)vtmp[3];
+
+			dc[x + 1] += qerror[0] * floydst[0];		//current
+			dc[x + 2] += qerror[1] * floydst[0];
+			dc[x + 3] += qerror[2] * floydst[0];
+			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
+			
+			dn[x - 1] += qerror[0] * floydst[1];
+
+			dn[x] += qerror[0] * floydst[2];
+			dn[x] += qerror[1] * floydst[1];
+
+			dn[x + 1] += qerror[0] * floydst[3];
+			dn[x + 1] += qerror[1] * floydst[2];
+			dn[x + 1] += qerror[2] * floydst[1];
+
+			dn[x + 2] += qerror[1] * floydst[3];
+			dn[x + 2] += qerror[2] * floydst[2];
+			dn[x + 2] += qerror[3] * floydst[1];
+
+			dn[x + 3] += qerror[2] * floydst[3];
+			dn[x + 3] += qerror[3] * floydst[2];
+
+			dn[x + 4] += qerror[3] * floydst[3];
+		}
+		for (; x < src_width; x++)
+		{
+			int v;
+			float qerror;
+
+			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
+			dst[x]=(unsigned char)v;
+			qerror = p[x] - v;
+			dn[x - 1] += qerror * floydst[1];
+			dn[x    ] += qerror * floydst[2];
+			//if (x != src_width - 1)				//width+1まで配列は確保してある
+			//{
+			dc[x + 1] += qerror * floydst[0];
+			dn[x + 1] += qerror * floydst[3];
+			//}
+		}
+
+		p += width;
+		dst += dst_pitch;
+		float *tn = dn;
+		dn = dc;
+		dc = tn;
+
+	}
+	_aligned_free(dither);
+
+}
+void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
+{
+	//未完
+
+	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+	const float scale = (mode-1) + 0.5f;
+	const float off = scale*0.5f - 0.5f;
+
+	float *dither = (float*)_aligned_malloc(2 * (width+2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に1ずつ伸ばしておく
+	float *dc = dither + 1;
+	float *dn = dc + width +1;	//-1にアクセスするのでポインタは1足しておく
+
+	MTRand mtr;
+
+	memset(dc-1, 0, (width+2) * sizeof(float));
+
+	for (int y = ys; y<ye; y++)
+	{
+		int x;
+
+		memset(dn-1, 0, (width+2) * sizeof(float));
+
+		for (x = 0; x < src_width-3; x+=4)
+		{
+			__m128i vtmp;
+			//float vtmp2[4];
+
+			__m128 qerror;
+			float rand[4];
+
+			//for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + mtr.randf()*scale - off;}
+			for (int ii = 0; ii < 4; ii++) {rand[ii] = mtr.randf();}
+			auto vtmp2_sse = _mm_loadu_ps(rand);	//mtr.randf	リトルエンディアン注意(レジスタには 128b←rand[0][1][2][3]→0b と入る)
+			auto p_sse  = _mm_loadu_ps(p+x);		//loaduには逆順に入れる命令がない・・・
+			auto dc_sse = _mm_loadu_ps(dc+x);
+
+			auto tmpf_sse = _mm_set1_ps(scale);
+			vtmp2_sse	= _mm_mul_ps(vtmp2_sse,tmpf_sse);	//*scale 
+			tmpf_sse	= _mm_set1_ps(off);
+			vtmp2_sse	= _mm_sub_ps(vtmp2_sse,tmpf_sse);	//-off
+			vtmp2_sse	= _mm_add_ps(vtmp2_sse,p_sse);		//+p
+			vtmp2_sse	= _mm_add_ps(vtmp2_sse,dc_sse);		//+dc
+
+			//vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			//qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+
+			float tmpf= vtmp2_sse.m128_f32[0];
+			int tmpi = min(max((int)tmpf, 0), 255);			
+			qerror.m128_f32[0] = p_sse.m128_f32[0] - tmpi;					//quant error ここのvtmpはintしたものを使う必要あり
+			vtmp.m128i_i32[0]  = tmpi;
+
+			//vtmp2[1] += qerror[0] * floydst[0];
+			//vtmp[1] = min(max((int)vtmp2[1], 0), 255);
+			//qerror[1] = p[x + 1] - vtmp[1];
+			tmpf= vtmp2_sse.m128_f32[1] + qerror.m128_f32[0] * floydst[0];
+			tmpi = min(max((int)tmpf, 0), 255);
+			qerror.m128_f32[1] = p_sse.m128_f32[1] - tmpi;
+			vtmp.m128i_i32[1]  = tmpi;
+
+			tmpf= vtmp2_sse.m128_f32[2] + qerror.m128_f32[1] * floydst[0];
+			tmpi = min(max((int)tmpf, 0), 255);
+			qerror.m128_f32[2] = p_sse.m128_f32[2] - tmpi;
+			vtmp.m128i_i32[2]  = tmpi;
+
+			tmpf= vtmp2_sse.m128_f32[3] + qerror.m128_f32[2] * floydst[0];
+			tmpi = min(max((int)tmpf, 0), 255);
+			qerror.m128_f32[3] = p_sse.m128_f32[3] - tmpi;
+			vtmp.m128i_i32[3]  = tmpi;
+
+
+			/*for (int ii = 0; ii < 4; ii++) {
+			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
+			dc[x + ii + 1] += qerror[ii] * floydst[0];
+
+			dn[x + ii - 1] += qerror[ii] * floydst[1];
+			dn[x + ii]     += qerror[ii] * floydst[2];
+			dn[x + ii + 1] += qerror[ii] * floydst[3];
+			}*/
+			
+			dst[x    ] = (unsigned char)vtmp.m128i_i32[0];		//new pixel
+			dst[x + 1] = (unsigned char)vtmp.m128i_i32[1];
+			dst[x + 2] = (unsigned char)vtmp.m128i_i32[2];
+			dst[x + 3] = (unsigned char)vtmp.m128i_i32[3];
+			/*
+			auto ssei=_mm_shuffle_epi8(vtmp, _mm_set_epi8(-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,0x0c,0x08,0x04,0x00));
+			int test = _mm_cvtsi128_si32(ssei);
+			*(int*)(dst+x)=test;
+			*/
+
+			/*dc[x + 1] += qerror.m128_f32[0] * floydst[0];		//current
+			dc[x + 2] += qerror.m128_f32[1] * floydst[0];
+			dc[x + 3] += qerror.m128_f32[2] * floydst[0];
+			dc[x + 4] += qerror.m128_f32[3] * floydst[0];		//next loop first */
+			tmpf_sse = _mm_set1_ps(floydst[0]);
+			tmpf_sse = _mm_mul_ps(tmpf_sse, qerror);
+			auto tmpf_sse2=_mm_load_ss(dc+x+4);		//最下位に読み込み
+			dc_sse = _mm_move_ss(dc_sse,tmpf_sse2);	//最下位をdc+x+4で上書き
+			dc_sse = _mm_permute_ps(dc_sse,0b00111001);	//最下位を一番上に持ってきてローテート シフトは整数じゃないとできなかったので
+			dc_sse = _mm_add_ps(dc_sse,tmpf_sse);
+			_mm_storeu_ps(dc+x+1, dc_sse);
+
+			dn[x - 1] += qerror.m128_f32[0] * floydst[1];
+
+			dn[x] += qerror.m128_f32[0] * floydst[2];
+			dn[x] += qerror.m128_f32[1] * floydst[1];
+
+			dn[x + 1] += qerror.m128_f32[0] * floydst[3];
+			dn[x + 1] += qerror.m128_f32[1] * floydst[2];
+			dn[x + 1] += qerror.m128_f32[2] * floydst[1];
+
+			dn[x + 2] += qerror.m128_f32[1] * floydst[3];
+			dn[x + 2] += qerror.m128_f32[2] * floydst[2];
+			dn[x + 2] += qerror.m128_f32[3] * floydst[1];
+
+			dn[x + 3] += qerror.m128_f32[2] * floydst[3];
+			dn[x + 3] += qerror.m128_f32[3] * floydst[2];
+
+			dn[x + 4] += qerror.m128_f32[3] * floydst[3];
+
+
+
+
+		}
+		for (; x < src_width; x++)
+		{
+			int v;
+			float qerror;
+
+			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
+			dst[x]=(unsigned char)v;
+			qerror = p[x] - v;
+			dn[x - 1] += qerror * floydst[1];
+			dn[x    ] += qerror * floydst[2];
+			//if (x != src_width - 1)				//width+1まで配列は確保してある
+			//{
+			dc[x + 1] += qerror * floydst[0];
+			dn[x + 1] += qerror * floydst[3];
+			//}
+		}
+
+		p += width;
+		dst += dst_pitch;
+		float *tn = dn;
+		dn = dc;
+		dc = tn;
+
+	}
+	_aligned_free(dither);
+
+}
+
+void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
+{
+
+	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+
+	float *dither = (float*)_aligned_malloc(2 * (width+8) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+	float *dc = dither + 4;
+	float *dn = dc + width +4;	//-1にアクセスするのでポインタは足しておく
+
+	memset(dc-4, 0, (width+8) * sizeof(float));
+
+
+	for (int y = ys; y<ye; y++)
+	{
+		int x;
+
+		memset(dn-4, 0, (width+8) * sizeof(float));
+
+		for (x = 0; x < src_width-3; x+=4)
+		{
+			int vtmp[4];
+			float vtmp2[4];
+			float qerror[4];
+
 			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
 
 			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
@@ -888,191 +1037,36 @@ void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, cons
 		dc = tn;
 
 	}
-	free(dither);
+	_aligned_free(dither);
 
-}
-
-void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode,  int ys, int ye)
-{
-
-	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
-	const float scale = (mode-1) + 0.5f;
-	const float off = scale*0.5f - 0.5f;
-
-	float *dither = (float*)malloc(2 * (width+2) * sizeof(float));	//width±1にアクセスするので前後に1ずつ伸ばしておく
-	float *dc = dither + 1;
-	float *dn = dc + width +1;	//-1にアクセスするのでポインタは1足しておく
-
-	MTRand mtr;
-
-	memset(dc, 0, width * sizeof(float));
-
-	for (int y = ys; y<ye; y++)
-	{
-		float qerror[4];
-		int x;
-
-		memset(dn, 0, width * sizeof(float));
-
-		for (x = 0; x < src_width-3; x+=4)
-		{
-			int vtmp[4];
-			float vtmp2[4];
-			float rand[4];
-
-			for (int ii=0;ii<4;ii++){rand[ii]=mtr.randf()*scale;}
-			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + rand[ii] - off;}
-
-			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
-
-			vtmp2[1] += qerror[0] * floydst[0];
-			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
-			qerror[1] = p[x + 1] - vtmp[1];
-
-			vtmp2[2] += qerror[1] * floydst[0];
-			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
-			qerror[2] = p[x + 2] - vtmp[2];
-
-			vtmp2[3] += qerror[2] * floydst[0];
-			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
-			qerror[3] = p[x + 3] - vtmp[3];
-
-
-			/*for (int ii = 0; ii < 4; ii++) {
-			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
-			dc[x + ii + 1] += qerror[ii] * floydst[0];
-
-			dn[x + ii - 1] += qerror[ii] * floydst[1];
-			dn[x + ii]     += qerror[ii] * floydst[2];
-			dn[x + ii + 1] += qerror[ii] * floydst[3];
-			}*/
-			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
-			dst[x + 1] = (unsigned char)vtmp[1];
-			dst[x + 2] = (unsigned char)vtmp[2];
-			dst[x + 3] = (unsigned char)vtmp[3];
-
-			dc[x + 1] += qerror[0] * floydst[0];		//current
-			dc[x + 2] += qerror[1] * floydst[0];
-			dc[x + 3] += qerror[2] * floydst[0];
-			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
-
-			dn[x - 1] += qerror[0] * floydst[1];
-
-			dn[x] += qerror[0] * floydst[2];
-			dn[x] += qerror[1] * floydst[1];
-
-			dn[x + 1] += qerror[0] * floydst[3];
-			dn[x + 1] += qerror[1] * floydst[2];
-			dn[x + 1] += qerror[2] * floydst[1];
-
-			dn[x + 2] += qerror[1] * floydst[3];
-			dn[x + 2] += qerror[2] * floydst[2];
-			dn[x + 2] += qerror[3] * floydst[1];
-
-			dn[x + 3] += qerror[2] * floydst[3];
-			dn[x + 3] += qerror[3] * floydst[2];
-
-			dn[x + 4] += qerror[3] * floydst[3];
-
-		}
-		for (; x < src_width; x++)
-		{
-			int v;
-			float qerror;
-
-			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
-			dst[x]=(unsigned char)v;
-			qerror = p[x] - v;
-			dn[x - 1] += qerror * floydst[1];
-			dn[x    ] += qerror * floydst[2];
-			//if (x != src_width - 1)				//width+1まで配列は確保してある
-			//{
-			dc[x + 1] += qerror * floydst[0];
-			dn[x + 1] += qerror * floydst[3];
-			//}
-		}
-
-		p += width;
-		dst += dst_pitch;
-		float *tn = dn;
-		dn = dc;
-		dc = tn;
-
-	}
-	free(dither);
-
-}
-
-void intcast_SSE_1(const float *p, unsigned char *dst, const int src_height,
-	const int src_width, const int dst_pitch, const int width)
-{
-	_asm
-	{
-		mov edx,p
-		mov ecx,dst
-		mov ebx,src_width
-		mov esi,src_height
-yloop:
-		xor edi,edi
-xloop:
-		movss xmm0,[edx+edi*4]
-		addss xmm0,sse_05
-		cvttss2si eax,xmm0
-		cmp eax,255
-		jle check0
-		mov eax,255
-		jmp writeb
-check0:
-		cmp eax,0
-		jge writeb
-		xor eax,eax
-writeb:
-		mov byte ptr[ecx+edi],al
-		add edi,1
-		cmp edi,ebx
-		jl xloop
-		add ecx,dst_pitch
-		mov edi,width
-		lea edx,[edx+edi*4]
-		sub esi,1
-		jnz yloop
-	}
 }
 
 void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width)
 {
-	_asm
+	auto sse2_05 = _mm_set_ps1(0.5f);
+	auto sse2_255 = _mm_set_ps1(255);
+	auto sse2_0 = _mm_set_ps1(0);
+	for (int y = 0; y<src_height; ++y)
 	{
-		mov edx,p
-		mov ecx,dst
-		mov ebx,src_width
-		mov esi,src_height
-yloop:
-		xor edi,edi
-xloop:
-		movups xmm0,[edx+edi*4]
-		movups xmm1,[edx+edi*4+16]
-		addps xmm0,sse_05
-		addps xmm1,sse_05
-		maxps xmm0,sse_0
-		maxps xmm1,sse_0
-		minps xmm0,sse_255
-		minps xmm1,sse_255
-		cvttps2dq xmm0,xmm0
-		cvttps2dq xmm1,xmm1
-		packssdw xmm0,xmm1
-		packuswb xmm0,xmm0
-		movq QWORD PTR[ecx+edi],xmm0
-		add edi,8
-		cmp edi,ebx
-		jl xloop
-		add ecx,dst_pitch
-		mov edi,width
-		lea edx,[edx+edi*4]
-		sub esi,1
-		jnz yloop
+		for (int x = 0; x < src_width; x += 8)
+		{
+			auto p_loop = _mm_loadu_ps(p + x);
+			auto p_loop2 = _mm_loadu_ps(p + x + 4);
+			auto add_loop = _mm_add_ps(sse2_05, p_loop);
+			auto add_loop2 = _mm_add_ps(sse2_05, p_loop2);
+			auto max_loop = _mm_max_ps(add_loop, sse2_0);
+			auto max_loop2 = _mm_max_ps(add_loop2, sse2_0);
+			auto min_loop = _mm_min_ps(max_loop, sse2_255);
+			auto min_loop2 = _mm_min_ps(max_loop2, sse2_255);
+			auto int1_loop = _mm_cvttps_epi32(min_loop);
+			auto int1_loop2 = _mm_cvttps_epi32(min_loop2);
+			auto packs_loop = _mm_packs_epi32(int1_loop, int1_loop2);
+			auto result = _mm_packus_epi16(packs_loop, packs_loop);
+			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x), result);
+		}
+		p += width;
+		dst += dst_pitch;
 	}
 }
 
@@ -1272,16 +1266,10 @@ void dfttest::conv_result_plane_to_int (int width, int height, int b, int ebuff_
 	}
 	else
 	{
-		if (dither == 101)
-			dither1_C(ebp,dstp,src_height,src_width,dst_pitch,width,1);
-		else if (dither>101)
-			dither_C(ebp,dstp,src_height,src_width,dst_pitch,width,dither-100);	//for debug only 正規コードでは消すこと
-		else if (dither)
-			dither_MT(ebp,dstp,src_height,src_width,dst_pitch,width,dither);
-		else if (!(src_width&7) && (((cpuflags&CPUF_SSE2) && opt == 0) || opt == 3))
+		if (dither)
+			dither_C(ebp,dstp,src_height,src_width,dst_pitch,width,dither);
+		else if (!(src_width&7) && (((cpuflags&CPUF_SSE2) && opt == 0) || opt == 3 || opt == 2))
 			intcast_SSE2_8(ebp,dstp,src_height,src_width,dst_pitch,width);
-		else if (((cpuflags&CPUF_SSE) && opt == 0) || opt > 1)
-			intcast_SSE_1(ebp,dstp,src_height,src_width,dst_pitch,width);
 		else
 			intcast_C(ebp,dstp,src_height,src_width,dst_pitch,width);
 	}
@@ -1341,7 +1329,7 @@ void dfttest::processTemporalBlock(int pos)
 void removeMean_C(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 {
 	const float gf = dftc[0]/dftgc[0];
-	/*
+	/*	for compiler vectorize
 	for (int h=0; h<ccnt; h+=2)
 	{
 		dftc2[h+0] = gf*dftgc[h+0];
@@ -1350,45 +1338,32 @@ void removeMean_C(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 		dftc[h+1] -= dftc2[h+1];
 	}
 	*/
-	// for compiler vectorize ただしそのままSSEに持っていくとorigコードと結果がかなり変わるので注意
 	for (int h = 0; h<ccnt; h++)
 	{
 		dftc2[h] = gf*dftgc[h];
 		dftc[h] -= dftc2[h];
 	}
-
 }
 
 void removeMean_SSE(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 {
-	__asm
+	const float gf = dftc[0] / dftgc[0];
+	auto gf_asm = _mm_load_ps1(reinterpret_cast<const float*>(&gf));
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edx,dftc
-		mov esi,dftgc
-		mov edi,dftc2
-		mov ecx,ccnt
-		xor eax,eax
-		movss xmm7,[edx]
-		//divss xmm7,[esi]
-		rcpss xmm6,[esi]
-		mulss xmm7,xmm6
-		shufps xmm7,xmm7,0
-four_loop:
-		movaps xmm0,[esi+eax]		//xmm0=[dftgc+h]
-		movaps xmm1,[edx+eax]		//xmm1=[dftc +h]
-		mulps xmm0,xmm7				//xmm0=[dftgc+h]*gf
-		subps xmm1,xmm0				//xmm1=[dftc +h] - [dftgc+h]*gf
-		movaps [edi+eax],xmm0		//[dftc2 +h] = [dftgc+h]*gf
-		movaps [edx+eax],xmm1		//[dftc  +h] = [dftc +h] - [dftgc+h]*gf
-		add eax, 16
-		sub ecx,4
-		jg four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto dftgc_loop = _mm_loadu_ps(dftgc + h);
+		//auto dftc2_loop = _mm_loadu_ps(dftc2 + h);
+		auto dftc2_result = _mm_mul_ps(gf_asm, dftgc_loop);
+		auto dftc_result = _mm_sub_ps(dftc_loop, dftc2_result);
+		_mm_storeu_ps(dftc2 + h, dftc2_result);
+		_mm_storeu_ps(dftc + h, dftc_result);
 	}
 }
 
 void addMean_C(float *dftc, const int ccnt, const float *dftc2)
 {
-	/*
+	/*	for compiler vectorize
 	for (int h=0; h<ccnt; h+=2)
 	{
 		dftc[h+0] += dftc2[h+0];
@@ -1399,29 +1374,17 @@ void addMean_C(float *dftc, const int ccnt, const float *dftc2)
 	{
 		dftc[h] += dftc2[h];
 	}
+
 }
 
 void addMean_SSE(float *dftc, const int ccnt, const float *dftc2)
 {
-	__asm
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edx,dftc
-		mov edi,dftc2
-		mov ecx,ccnt
-		xor eax,eax
-twelve_loop:
-		movaps xmm0,[edx+eax*4]
-		movaps xmm1,[edx+eax*4+16]
-		movaps xmm2,[edx+eax*4+32]
-		addps xmm0,[edi+eax*4]
-		addps xmm1,[edi+eax*4+16]
-		addps xmm2,[edi+eax*4+32]
-		movaps [edx+eax*4],xmm0
-		movaps [edx+eax*4+16],xmm1
-		movaps [edx+eax*4+32],xmm2
-		add eax,12
-		cmp eax,ecx
-		jl twelve_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto dftc2_loop = _mm_loadu_ps(dftc2 + h);
+		auto dftc_result = _mm_add_ps(dftc2_loop, dftc_loop);
+		_mm_storeu_ps(dftc + h, dftc_result);
 	}
 }
 
@@ -1430,7 +1393,7 @@ void filter_0_C(float *dftc, const float *sigmas, const int ccnt,
 {
 	for (int h=0; h<ccnt; h+=2)
 	{
-		const float psd = dftc[h+0]*dftc[h+0]+dftc[h+1]*dftc[h+1];		//psd=dftc[h]^2+dftc[h+1]^2
+		const float psd = dftc[h+0]*dftc[h+0]+dftc[h+1]*dftc[h+1];
 		const float coeff = max((psd-sigmas[h])/(psd+1e-15f),0.0f);
 		dftc[h+0] *= coeff;
 		dftc[h+1] *= coeff;
@@ -1440,6 +1403,27 @@ void filter_0_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_0_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
+#if defined (_WIN64)
+	auto zero = _mm_setzero_ps();
+	auto sse_1em15 = _mm_set_ps1(1e-15f);
+	for (int h = 0; h<ccnt; h += 4)
+	{
+		auto dftc_loop   = _mm_loadu_ps(dftc + h);		//dftc[h+ 3,2,1,0]
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto psd1 = _mm_mul_ps(dftc_loop, dftc_loop);	//dftc[h+ 3,2,1,0].^2
+		auto psd2 = _mm_shuffle_ps(psd1, psd1, 177);	//dftc[h+ 2,3,0,1].^2
+		auto psd = _mm_add_ps(psd1, psd2);				//psd=dftc[h+ 3,2,1,0].^2
+
+		auto num = _mm_sub_ps(psd, sigmas_loop);		// psd-sigmas
+		auto den = _mm_add_ps(psd, sse_1em15);			// psd+1e-15f
+			 den = _mm_rcp_ps(den);						// 1/(psd+1e-15f)
+		auto res = _mm_mul_ps(num, den);				// (psd-sigmas[h])/(psd+1e-15f)
+			 res = _mm_max_ps(res,zero);				// max(res,0)
+			 res = _mm_mul_ps(res,dftc_loop);			// res *= dftc
+		_mm_storeu_ps(dftc + h, res);
+	}
+#else
+	__declspec(align(16)) const float sse_1em15[4] = { 1e-15f, 1e-15f, 1e-15f, 1e-15f };
 	__asm
 	{
 		mov edi,dftc
@@ -1454,7 +1438,7 @@ four_loop:
 		mulps xmm2,xmm2				//xmm2=dftc[h+ 3,2,1,0].^2
 		movaps xmm3,xmm2			//xmm3=dftc[h+ 3,2,1,0].^2
 		shufps xmm3,xmm3,177		//xmm3=dftc[h+ 2,3,0,1].^2
-		addps xmm3,xmm2				//xmm3=dftc[h]^2+dftc[h+1]^2 で32x4bit psd
+		addps xmm3,xmm2				//xmm3=dftc[h]^2+dftc[h+1]^2 で32bitx4 psd
 		movaps xmm2,xmm3			//xmm2=dftc[h]^2+dftc[h+1]^2
 		subps xmm3,[edx+eax]		//xmm3=dftc[h]^2+dftc[h+1]^2 - simgas[h]
 		addps xmm2,xmm7				//xmm2=dftc[h]^2+dftc[h]^2+1e-15
@@ -1468,6 +1452,7 @@ four_loop:
 		sub ecx,4
 		jg four_loop
 	}
+#endif
 }
 
 void filter_1_C(float *dftc, const float *sigmas, const int ccnt,
@@ -1484,26 +1469,16 @@ void filter_1_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_1_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov ecx,ccnt
-		xor eax,eax
-four_loop:
-		movaps xmm1,[edi+eax*4]
-		movaps xmm2,xmm1
-		mulps xmm2,xmm2
-		movaps xmm3,xmm2
-		shufps xmm3,xmm3,177
-		addps xmm3,xmm2
-		movaps xmm4,[edx+eax*4]
-		cmpps xmm4,xmm3,2
-		andps xmm1,xmm4
-		movaps [edi+eax*4],xmm1
-		add eax,4
-		cmp eax,ecx
-		jl four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto mul1_loop = _mm_mul_ps(dftc_loop, dftc_loop);
+		auto shuff_loop = _mm_shuffle_ps(mul1_loop, mul1_loop, 177);
+		auto add1_loop = _mm_add_ps(mul1_loop, shuff_loop);
+		auto cmple1_loop = _mm_cmple_ps(sigmas_loop, add1_loop);
+		auto and1_loop = _mm_and_ps(cmple1_loop, dftc_loop);
+		_mm_storeu_ps(dftc + h, and1_loop);
 	}
 }
 
@@ -1520,22 +1495,12 @@ void filter_2_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_2_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov ecx,ccnt
-		xor eax,eax
-eight_loop:
-		movaps xmm0,[edi+eax*4]
-		movaps xmm1,[edi+eax*4+16]
-		mulps xmm0,[edx+eax*4]
-		mulps xmm1,[edx+eax*4+16]
-		movaps [edi+eax*4],xmm0
-		movaps [edi+eax*4+16],xmm1
-		add eax,8
-		cmp eax,ecx
-		jl eight_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto mul_loop = _mm_mul_ps(dftc_loop, sigmas_loop);
+		_mm_storeu_ps(dftc + h, mul_loop);
 	}
 }
 
@@ -1561,38 +1526,26 @@ void filter_3_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_3_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	auto sse_ones = _mm_set_ps1(0xFFFFFFFFFFFFFFFF);
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov ecx,sigmas2
-		mov ebx,pmin
-		mov esi,pmax
-		xor eax,eax
-		movaps xmm7,sse_ones
-four_loop:
-		movaps xmm0,[edi+eax*4]
-		movaps xmm2,xmm0
-		mulps xmm2,xmm2
-		movaps xmm3,xmm2
-		shufps xmm3,xmm3,177
-		addps xmm3,xmm2
-		movaps xmm1,[esi+eax*4]
-		movaps xmm2,[ebx+eax*4]
-		cmpps xmm1,xmm3,5
-		cmpps xmm2,xmm3,2
-		andps xmm1,xmm2
-		movaps xmm2,[edx+eax*4]
-		movaps xmm4,[ecx+eax*4]
-		andps xmm2,xmm1
-		xorps xmm1,xmm7
-		andps xmm4,xmm1
-		orps xmm2,xmm4
-		mulps xmm0,xmm2
-		movaps [edi+eax*4],xmm0
-		add eax,4
-		cmp eax,ccnt
-		jl four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto sigmas2_loop = _mm_loadu_ps(sigmas2 + h);
+		auto pmin_loop = _mm_loadu_ps(pmin + h);
+		auto pmax_loop = _mm_loadu_ps(pmax + h);
+		auto mul1_loop = _mm_mul_ps(dftc_loop, dftc_loop);
+		auto shuff_loop = _mm_shuffle_ps(mul1_loop, mul1_loop, 177);
+		auto add1_loop = _mm_add_ps(mul1_loop, shuff_loop);
+		auto cmpnle1_loop = _mm_cmpnle_ps(pmax_loop, add1_loop);
+		auto cmple1_loop = _mm_cmple_ps(pmin_loop, add1_loop);
+		auto and1_loop = _mm_and_ps(cmple1_loop, cmpnle1_loop);
+		auto and2_loop = _mm_and_ps(sigmas_loop, and1_loop);
+		auto xor1_loop = _mm_xor_ps(sse_ones, and1_loop);
+		auto and3_loop = _mm_and_ps(xor1_loop, sigmas2_loop);
+		auto  or1_loop = _mm_or_ps(and3_loop, and2_loop);
+		auto mul2_loop = _mm_mul_ps(or1_loop, dftc_loop);
+		_mm_storeu_ps(dftc + h, mul2_loop);
 	}
 }
 
@@ -1611,40 +1564,27 @@ void filter_4_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_4_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	auto sse_1em15 = _mm_set_ps1(1e-15f);
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov ecx,ccnt
-		mov ebx,pmin
-		mov esi,pmax
-		xor eax,eax
-		movaps xmm7,sse_1em15
-four_loop:
-		movaps xmm0,[edi+eax*4]
-		movaps xmm2,xmm0
-		mulps xmm2,xmm2
-		movaps xmm3,xmm2
-		shufps xmm3,xmm3,177
-		addps xmm2,xmm7
-		addps xmm3,xmm2
-		movaps xmm1,[esi+eax*4]
-		movaps xmm2,[ebx+eax*4]
-		movaps xmm4,xmm1
-		addps xmm2,xmm3
-		addps xmm1,xmm3
-		mulps xmm4,xmm3
-		mulps xmm2,xmm1
-		//divps xmm4,xmm2
-		rcpps xmm2,xmm2
-		mulps xmm4,xmm2
-		sqrtps xmm4,xmm4
-		mulps xmm4,[edx+eax*4]
-		mulps xmm0,xmm4
-		movaps [edi+eax*4],xmm0
-		add eax,4
-		cmp eax,ecx
-		jl four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto pmin_loop = _mm_loadu_ps(pmin + h);
+		auto pmax_loop = _mm_loadu_ps(pmax + h);
+		auto mul1_loop = _mm_mul_ps(dftc_loop, dftc_loop);
+		auto shuff_loop = _mm_shuffle_ps(mul1_loop, mul1_loop, 177);
+		auto add1_loop = _mm_add_ps(sse_1em15, mul1_loop);
+		auto add2_loop = _mm_add_ps(add1_loop, shuff_loop);
+		auto add3_loop = _mm_add_ps(add2_loop, pmin_loop);
+		auto add4_loop = _mm_add_ps(add2_loop, pmax_loop);
+		auto mul2_loop = _mm_mul_ps(add2_loop, pmax_loop);
+		auto mul3_loop = _mm_mul_ps(add4_loop, add3_loop);
+		auto rcp1_loop = _mm_rcp_ps(mul3_loop);
+		auto mul4_loop = _mm_mul_ps(rcp1_loop, mul2_loop);
+		auto sqrt_loop = _mm_sqrt_ps(mul4_loop);
+		auto mul5_loop = _mm_mul_ps(sigmas_loop, sqrt_loop);
+		auto mul6_loop = _mm_mul_ps(mul5_loop, dftc_loop);
+		_mm_storeu_ps(dftc + h, mul6_loop);
 	}
 }
 
@@ -1661,74 +1601,27 @@ void filter_5_C(float *dftc, const float *sigmas, const int ccnt,
 	}
 }
 
-void filter_5_SSE(float *dftc, const float *sigmas, const int ccnt,
-	const float *pmin, const float *pmax, const float *sigmas2)
-{
-	__asm
-	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov esi,ccnt
-		mov ebx,pmin
-		xor eax,eax
-four_loop:
-		movss xmm1,[ebx]
-		movaps xmm2,[edi+eax*4]
-		mulps xmm2,xmm2
-		movaps xmm0,xmm2
-		shufps xmm1,xmm1,0
-		shufps xmm0,xmm0,177
-		addps xmm0,xmm2
-		movaps xmm2,xmm0
-		subps xmm0,[edx+eax*4]
-		addps xmm2,sse_1em15
-		xorps xmm5,xmm5
-		//divps xmm3,xmm2
-		rcpps xmm2,xmm2
-		mulps xmm0,xmm2
-		maxps xmm0,xmm5
-		call pow_sse
-		mulps xmm0,[edi+eax*4]
-		movaps [edi+eax*4],xmm0
-		add eax,4
-		cmp eax,esi
-		jl four_loop
-		emms
-	}
-}
-
 void filter_5_SSE2(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	auto zero = _mm_setzero_ps();
+	auto sse_1em15 = _mm_set_ps1(1e-15f);
+	auto pmin_zero = _mm_set_ps1(pmin[0]);
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov esi,ccnt
-		mov ebx,pmin
-		xor eax,eax
-four_loop:
-		movss xmm1,[ebx]
-		movaps xmm2,[edi+eax*4]
-		mulps xmm2,xmm2
-		movaps xmm0,xmm2
-		shufps xmm1,xmm1,0
-		shufps xmm0,xmm0,177
-		addps xmm0,xmm2
-		movaps xmm2,xmm0
-		subps xmm0,[edx+eax*4]
-		addps xmm2,sse_1em15
-		xorps xmm5,xmm5
-		//divps xmm3,xmm2
-		rcpps xmm2,xmm2
-		mulps xmm0,xmm2
-		maxps xmm0,xmm5
-		call pow_sse2
-		mulps xmm0,[edi+eax*4]
-		movaps [edi+eax*4],xmm0
-		add eax,4
-		cmp eax,esi
-		jl four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto mul1_loop = _mm_mul_ps(dftc_loop, dftc_loop);
+		auto shuff_loop = _mm_shuffle_ps(mul1_loop, mul1_loop, 177);
+		auto add1_loop = _mm_add_ps(shuff_loop, mul1_loop);
+		auto sub1_loop = _mm_sub_ps(add1_loop, sigmas_loop);
+		auto add2_loop = _mm_add_ps(sse_1em15, add1_loop);
+		auto rcp1_loop = _mm_rcp_ps(add2_loop);
+		auto mul3_loop = _mm_mul_ps(rcp1_loop, sub1_loop);
+		auto max1_loop = _mm_max_ps(zero, mul3_loop);
+		auto pow1_loop = fmath::pow_ps(max1_loop, pmin_zero); // DJATOM: fmath is the most accurate in comparison to powf() (from what I tested)
+		auto mul4_loop = _mm_mul_ps(dftc_loop, pow1_loop);
+		_mm_storeu_ps(dftc + h, mul4_loop);
 	}
 }
 
@@ -1747,37 +1640,23 @@ void filter_6_C(float *dftc, const float *sigmas, const int ccnt,
 void filter_6_SSE(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	__asm
+	auto sse_1em15 = _mm_set_ps1(1e-15f);
+	for (int h = 0; h<ccnt; h += 4)
 	{
-		mov edi,dftc
-		mov edx,sigmas
-		mov ecx,ccnt
-		xor eax,eax
-		//xorps xmm5,xmm5
-		movaps xmm7,sse_1em15
-four_loop:
-		movaps xmm1,[edi+eax*4]
-		movaps xmm2,xmm1
-		mulps xmm2,xmm2
-		movaps xmm3,xmm2
-		shufps xmm3,xmm3,177
-		addps xmm3,xmm2
-		movaps xmm2,xmm3
-		subps xmm3,[edx+eax*4]
-		addps xmm2,xmm7
-		//divps xmm3,xmm2
-		rcpps xmm2,xmm2
-		mulps xmm3,xmm2
-		//maxps xmm3,xmm5
-		//sqrtps xmm3,xmm3
-		maxps xmm3,xmm7
-		rsqrtps xmm3,xmm3
-		rcpps xmm3,xmm3
-		mulps xmm1,xmm3
-		movaps [edi+eax*4],xmm1
-		add eax,4
-		cmp eax,ecx
-		jl four_loop
+		auto dftc_loop = _mm_loadu_ps(dftc + h);
+		auto sigmas_loop = _mm_loadu_ps(sigmas + h);
+		auto mul1_loop = _mm_mul_ps(dftc_loop, dftc_loop);
+		auto shuff_loop = _mm_shuffle_ps(mul1_loop, mul1_loop, 177);
+		auto add1_loop = _mm_add_ps(shuff_loop, mul1_loop);
+		auto sub1_loop = _mm_sub_ps(add1_loop, sigmas_loop);
+		auto add2_loop = _mm_add_ps(sse_1em15, add1_loop);
+		auto rcp1_loop = _mm_rcp_ps(add2_loop);
+		auto mul2_loop = _mm_mul_ps(rcp1_loop, sub1_loop);
+		auto max1_loop = _mm_max_ps(sse_1em15, mul2_loop);
+		auto rsq1_loop = _mm_rsqrt_ps(max1_loop);
+		auto rcp2_loop = _mm_rcp_ps(rsq1_loop);
+		auto mul3_loop = _mm_mul_ps(dftc_loop, rcp2_loop);
+		_mm_storeu_ps(dftc + h, mul3_loop);
 	}
 }
 
@@ -2020,9 +1899,9 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		env->ThrowError("dfttest:  swin must be between 0 and 11 (inclusive)!");
 	if (threads < 0 || threads > 16)
 		env->ThrowError("dfttest:  threads must be between 0 and 16 (inclusive)!");
-	if (opt < 0 || opt > 3)
-		env->ThrowError("dfttest:  opt must be set to 0, 1, 2, or 3!");
-	if (dither < 0 || dither > 104)
+	if (opt < 0 || opt > 4)
+		env->ThrowError("dfttest:  opt must be set to 0, 1, 2, ,3 or 4!");
+	if (dither < 0 || dither > 300)
 		env->ThrowError("dfttest:  invalid dither value!\n");
 	if (threads == 0)
 		threads = num_processors();
@@ -2072,7 +1951,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		noyc = (proc_height>> ssyuv) + EXTRA (proc_height>> ssyuv, sbsize) + ae;
 	}
 	PlanarFrame *padPF = new PlanarFrame();
-	padPF->createPlanar(noyl*lsb_in_hmul,noyc*lsb_in_hmul,noxl,noxc);
+	padPF->createPlanar(noyl*lsb_in_hmul,noyc*lsb_in_hmul,noxl,noxc,false,false,1,8); // DJATOM: line updated with hardcoded defaults. Now it works with 8-bit frame using updated PlanarFrame
 	if (tbsize > 1)
 		fc = new nlCache(tbsize,padPF,(VideoInfo)vi_src);
 	else
@@ -2086,7 +1965,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			if ((b == 0 && !Y) || (b == 1 && !U) || (b == 2 && !V))
 				continue;
 			ebuff[q*3+b] = (float*)_aligned_malloc(padPF->GetWidth(b)*
-				(padPF->GetHeight(b)/lsb_in_hmul)*sizeof(float),16);
+				(padPF->GetHeight(b)/lsb_in_hmul)*sizeof(float),ALIGN_SIZE);
 		}
 	}
 	delete padPF;
@@ -2099,10 +1978,10 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		assert (dstPF_lsb->GetPitch (PLANAR_V) == dstPF->GetPitch (PLANAR_V));
 	}
 	int w = 0;
-	hw = (float*)_aligned_malloc(bvolume*sizeof(float),16);
+	hw = (float*)_aligned_malloc(bvolume*sizeof(float),ALIGN_SIZE);
 	createWindow(hw,tmode,tbsize,tosize,twin,tbeta,smode,sbsize,sosize,swin,sbeta);
-	float *dftgr = (float*)_aligned_malloc(bvolume*sizeof(float),16);
-	dftgc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),16);
+	float *dftgr = (float*)_aligned_malloc(bvolume*sizeof(float),ALIGN_SIZE);
+	dftgc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),ALIGN_SIZE);
 	if (tbsize > 1)
 		ftg = fftwf_plan_dft_r2c_3d(tbsize, sbsize, sbsize, dftgr, dftgc, 
 			FFTW_PATIENT|FFTW_DESTROY_INPUT);
@@ -2131,10 +2010,10 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 	sprintf(buf,"dfttest:  scaling factor = %f\n", wscale);
 	OutputDebugString(buf);
 	fftwf_execute_dft_r2c(ftg,dftgr,dftgc);
-	sigmas = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),16);
-	sigmas2 = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),16);
-	pmins = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),16);
-	pmaxs = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),16);
+	sigmas = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),ALIGN_SIZE);
+	sigmas2 = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),ALIGN_SIZE);
+	pmins = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),ALIGN_SIZE);
+	pmaxs = (float*)_aligned_malloc((ccnt*2+11)*sizeof(float),ALIGN_SIZE);
 	if (_sstring[0] || _ssx[0] || _ssy[0] || _sst[0])
 		sigmaFromString(sigmas,_sstring,_ssx,_ssy,_sst,wscalef,env);
 	else if (*sfile)
@@ -2165,7 +2044,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		for (int i=0; i<ccnt*2; ++i)
 			pmaxs[i] = pmax/wscale;
 	}
-	fftwf_complex *ta = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+3),16);
+	fftwf_complex *ta = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+3),ALIGN_SIZE);
 	if (tbsize > 1)
 	{
 		ft = fftwf_plan_dft_r2c_3d(tbsize, sbsize, sbsize, dftgr, ta, FFTW_PATIENT|FFTW_DESTROY_INPUT);
@@ -2217,13 +2096,13 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			pssInfo[i]->pf = nlf->ppf;
 		else
 			pssInfo[i]->pfplut = (const unsigned char **)_aligned_malloc(
-				fc->size*sizeof(const unsigned char*),16);
+				fc->size*sizeof(const unsigned char*),ALIGN_SIZE);
 		pssInfo[i]->fc = fc;
 		pssInfo[i]->fftwf_execute_dft_r2c = fftwf_execute_dft_r2c;
 		pssInfo[i]->fftwf_execute_dft_c2r = fftwf_execute_dft_c2r;
-		pssInfo[i]->dftr = (float*)_aligned_malloc(bvolume*sizeof(float),16);
-		pssInfo[i]->dftc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),16);
-		pssInfo[i]->dftc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),16);
+		pssInfo[i]->dftr = (float*)_aligned_malloc(bvolume*sizeof(float),ALIGN_SIZE);
+		pssInfo[i]->dftc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),ALIGN_SIZE);
+		pssInfo[i]->dftc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),ALIGN_SIZE);
 		for (int b=0; b<3; ++b)
 		{
 			const int height = smode == 0 ? pf->GetHeight(b)/lsb_in_hmul-((sbsize>>1)<<1) : 
@@ -2251,7 +2130,78 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 				pssInfo[i]->ofs_lsb[b] = 0;
 			}
 		}
-		if (((env->GetCPUFlags()&CPUF_SSE2) && opt == 0) || opt == 3)
+
+#ifdef AVX_BUILD
+		if (((env->GetCPUFlags()&CPUF_AVX2) && opt == 0) || opt == 4)
+		{	//AVX2の時
+			if (!(sbsize & 7))
+			{
+				pssInfo[i]->proc0 = proc0_AVX2;
+				pssInfo[i]->proc1 = proc1_AVX2;
+			}
+			else if (!(sbsize & 3))
+			{
+				pssInfo[i]->proc0 = proc0_SSE2_4;
+				pssInfo[i]->proc1 = proc1_SSE_4;
+			}
+			else
+			{
+				pssInfo[i]->proc0 = proc0_C;
+				pssInfo[i]->proc1 = proc1_C;
+			}
+			pssInfo[i]->removeMean = removeMean_AVX;
+			pssInfo[i]->addMean = addMean_AVX;
+			if (ftype == 0)
+			{
+				if (fabsf(_f0beta - 1.0f) < 0.00005f)
+					pssInfo[i]->filterCoeffs = filter_0_AVX;
+				else if (fabsf(_f0beta - 0.5f) < 0.00005f)
+					pssInfo[i]->filterCoeffs = filter_6_SSE;
+				else
+					pssInfo[i]->filterCoeffs = filter_5_SSE2;
+			}
+			else if (ftype == 1) pssInfo[i]->filterCoeffs = filter_1_SSE;
+			else if (ftype == 2) pssInfo[i]->filterCoeffs = filter_2_SSE;
+			else if (ftype == 3) pssInfo[i]->filterCoeffs = filter_3_SSE;
+			else pssInfo[i]->filterCoeffs = filter_4_SSE;
+		}
+		else if (((env->GetCPUFlags()&CPUF_AVX) && opt == 0) || opt == 3)
+		{	//AVXの時
+			if (!(sbsize & 7))
+			{
+				pssInfo[i]->proc0 = proc0_AVX;
+				pssInfo[i]->proc1 = proc1_AVX;
+			}
+			else if (!(sbsize & 3))
+			{
+				pssInfo[i]->proc0 = proc0_SSE2_4;
+				pssInfo[i]->proc1 = proc1_SSE_4;
+			}
+			else
+			{
+				pssInfo[i]->proc0 = proc0_C;
+				pssInfo[i]->proc1 = proc1_C;
+			}
+			pssInfo[i]->removeMean = removeMean_AVX;
+			pssInfo[i]->addMean = addMean_AVX;
+			if (ftype == 0)
+			{
+				if (fabsf(_f0beta - 1.0f) < 0.00005f)
+					pssInfo[i]->filterCoeffs = filter_0_AVX;
+				else if (fabsf(_f0beta - 0.5f) < 0.00005f)
+					pssInfo[i]->filterCoeffs = filter_6_SSE;
+				else
+					pssInfo[i]->filterCoeffs = filter_5_SSE2;
+			}
+			else if (ftype == 1) pssInfo[i]->filterCoeffs = filter_1_SSE;
+			else if (ftype == 2) pssInfo[i]->filterCoeffs = filter_2_SSE;
+			else if (ftype == 3) pssInfo[i]->filterCoeffs = filter_3_SSE;
+			else pssInfo[i]->filterCoeffs = filter_4_SSE;
+		}
+		else if (((env->GetCPUFlags()&CPUF_SSE2) && opt == 0) || opt == 2)
+#else
+		if (((env->GetCPUFlags()&CPUF_SSE2) && opt == 0) || opt == 2)
+#endif
 		{	//SSE2の時
 			if (!(sbsize&7))
 			{
@@ -2268,8 +2218,8 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
 			}
-			pssInfo[i]->removeMean = removeMean_SSE;//実はコンパイラのベクトル化でも近い速度が出る
-			pssInfo[i]->addMean = addMean_SSE;		//実はコンパイラのベクトル化でも近い速度が出る
+			pssInfo[i]->removeMean = removeMean_SSE;
+			pssInfo[i]->addMean = addMean_SSE;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f)
@@ -2278,39 +2228,6 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 					pssInfo[i]->filterCoeffs = filter_6_SSE;
 				else
 					pssInfo[i]->filterCoeffs = filter_5_SSE2;
-			}
-			else if (ftype == 1) pssInfo[i]->filterCoeffs = filter_1_SSE;
-			else if (ftype == 2) pssInfo[i]->filterCoeffs = filter_2_SSE;
-			else if (ftype == 3) pssInfo[i]->filterCoeffs = filter_3_SSE;
-			else pssInfo[i]->filterCoeffs = filter_4_SSE;
-		}
-		else if (((env->GetCPUFlags()&CPUF_SSE) && opt == 0) || opt == 2)
-		{	//SSEの時
-			if (!(sbsize&7))
-			{
-				pssInfo[i]->proc0 = proc0_SSE_8;
-				pssInfo[i]->proc1 = proc1_SSE_8;
-			}
-			else if (!(sbsize&3))
-			{
-				pssInfo[i]->proc0 = proc0_SSE_4;
-				pssInfo[i]->proc1 = proc1_SSE_4;
-			}
-			else
-			{
-				pssInfo[i]->proc0 = proc0_C;
-				pssInfo[i]->proc1 = proc1_C;
-			}
-			pssInfo[i]->removeMean = removeMean_SSE;
-			pssInfo[i]->addMean = addMean_SSE;
-			if (ftype == 0)
-			{
-				if (fabsf(_f0beta-1.0f) < 0.00005f) 
-					pssInfo[i]->filterCoeffs = filter_0_SSE;
-				else if (fabsf(_f0beta-0.5f) < 0.00005f)
-					pssInfo[i]->filterCoeffs = filter_6_SSE;
-				else
-					pssInfo[i]->filterCoeffs = filter_5_SSE;
 			}
 			else if (ftype == 1) pssInfo[i]->filterCoeffs = filter_1_SSE;
 			else if (ftype == 2) pssInfo[i]->filterCoeffs = filter_2_SSE;
@@ -2339,7 +2256,14 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		}
 		if (lsb_in_flag)
 		{
-			pssInfo[i]->proc0 = proc0_16_C;
+			if (((env->GetCPUFlags()&CPUF_SSE2) && opt == 0) || opt >= 2)
+			{
+				pssInfo[i]->proc0 = proc0_16_SSE2;
+			}
+			else
+			{
+				pssInfo[i]->proc0 = proc0_16_C;
+			}
 		}
 		pssInfo[i]->jobFinished = CreateEvent(NULL, TRUE, TRUE, NULL);
 		pssInfo[i]->nextJob = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -2405,9 +2329,9 @@ void dfttest::getNoiseSpectrum(const char *fname, const char *nstring,
 	PS_INFO *pss = pssInfo[0];
 	PlanarFrame *prf = new PlanarFrame(vi_src);
 	memset(dest,0,ccnt*2*sizeof(float));
-	float *hw2 = (float*)_aligned_malloc(bvolume*sizeof(float),16);
+	float *hw2 = (float*)_aligned_malloc(bvolume*sizeof(float),ALIGN_SIZE);
 	createWindow(hw2,0,tbsize,tosize,twin,tbeta,0,sbsize,sosize,swin,sbeta);
-	fftwf_complex *dftgc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),16);
+	fftwf_complex *dftgc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex)*(ccnt+11),ALIGN_SIZE);
 	float wscale2 = 0.0f, alpha = ftype == 0 ? 5.0f : 7.0f, *dftr = pss->dftr;
 	int w = 0;
 	for (int s=0; s<tbsize; ++s)
@@ -2751,7 +2675,7 @@ void dfttest::loadFile(float *dest, const char *src, const float wscale, IScript
 int num_processors()
 {
 	int pcount = 0;
-	DWORD p_aff, s_aff;
+	DWORD_PTR p_aff, s_aff;
 	GetProcessAffinityMask(GetCurrentProcess(), &p_aff, &s_aff);
 	for(; p_aff != 0; p_aff>>=1) 
 		pcount += (p_aff&1);
@@ -2934,12 +2858,16 @@ AVSValue __cdecl Create_dfttest(AVSValue args, void* user_data, IScriptEnvironme
 		env);
 }
 
-extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env) 
+const AVS_Linkage *AVS_linkage = nullptr;
+
+extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(IScriptEnvironment* env, const AVS_Linkage* const vectors)
 {
+	AVS_linkage = vectors;
+
 	env->AddFunction("dfttest", "c[Y]b[U]b[V]b[ftype]i[sigma]f[sigma2]f[pmin]f" \
 		"[pmax]f[sbsize]i[smode]i[sosize]i[tbsize]i[tmode]i[tosize]i[swin]i" \
 		"[twin]i[sbeta]f[tbeta]f[zmean]b[sfile]s[sfile2]s[pminfile]s[pmaxfile]s" \
 		"[f0beta]f[nfile]s[threads]i[opt]i[nstring]s[sstring]s[ssx]s[ssy]s[sst]s" \
 		"[dither]i[lsb]b[lsb_in]b[quiet]b", Create_dfttest, 0);
-	return 0;
+	return "DFTTest for Avisynth+";
 }
