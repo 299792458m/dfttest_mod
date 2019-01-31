@@ -631,11 +631,11 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 	else if (mode<300){
 		//オリジナルのコード
 		int mode2=mode-200;
-		dither_C_sub0(p, dst, src_height, src_width, dst_pitch, width, mode2);
+		dither_C_sub_org(p, dst, src_height, src_width, dst_pitch, width, mode2);
 	}
 }
 
-void dither_C_sub0(const float *p, unsigned char *dst, const int src_height,
+void dither_C_sub_org(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
 {
 	float *dither = (float*)_aligned_malloc(2*width*sizeof(float),ALIGN_SIZE);
@@ -696,26 +696,30 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
-			int vtmp[4];
-			float vtmp2[4];
-			float qerror[4];
+			//何故かdither>2では配列を使わない方が早く、dither=1では配列を使った方が早い
+			int v0,v1,v2,v3;
+			float vtmp0,vtmp1,vtmp2,vtmp3;
+			float qerror0,qerror1,qerror2,qerror3;
 
-			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + mtr.randf()*scale - off;}
+			vtmp0 = p[x] + dc[x] + mtr.randf()*scale - off;
+			vtmp1 = p[x+1] + dc[x+1] + mtr.randf()*scale - off;
+			vtmp2 = p[x+2] + dc[x+2] + mtr.randf()*scale - off;
+			vtmp3 = p[x+3] + dc[x+3] + mtr.randf()*scale - off;
 
-			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+			v0 = min(max((int)vtmp0, 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerror0 = p[x    ] - v0;					//quant error ここのvtmpはintしたものを使う必要あり
 
-			vtmp2[1] += qerror[0] * floydst[0];
-			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
-			qerror[1] = p[x + 1] - vtmp[1];
+			vtmp1 += qerror0 * floydst[0];
+			v1 = min(max((int)vtmp1, 0), 255);		//float→int→charが一番コストが少ない？(命令があるので)
+			qerror1 = p[x + 1] - v1;
 
-			vtmp2[2] += qerror[1] * floydst[0];
-			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
-			qerror[2] = p[x + 2] - vtmp[2];
+			vtmp2 += qerror1 * floydst[0];
+			v2 = min(max((int)vtmp2, 0), 255);
+			qerror2 = p[x + 2] - v2;
 
-			vtmp2[3] += qerror[2] * floydst[0];
-			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
-			qerror[3] = p[x + 3] - vtmp[3];
+			vtmp3 += qerror2 * floydst[0];
+			v3 = min(max((int)vtmp3, 0), 255);
+			qerror3 = p[x + 3] - v3;
 
 
 			/*
@@ -728,42 +732,45 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 			dn[x + ii + 1] += qerror[ii] * floydst[3];
 			}
 			*/
-			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
-			dst[x + 1] = (unsigned char)vtmp[1];
-			dst[x + 2] = (unsigned char)vtmp[2];
-			dst[x + 3] = (unsigned char)vtmp[3];
+			dst[x    ] = (unsigned char)v0;		//new pixel
+			dst[x + 1] = (unsigned char)v1;
+			dst[x + 2] = (unsigned char)v2;
+			dst[x + 3] = (unsigned char)v3;
 
-			dc[x + 1] += qerror[0] * floydst[0];		//current
-			dc[x + 2] += qerror[1] * floydst[0];
-			dc[x + 3] += qerror[2] * floydst[0];
-			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
+			dc[x + 1] += qerror0 * floydst[0];		//current
+			dc[x + 2] += qerror1 * floydst[0];
+			dc[x + 3] += qerror2 * floydst[0];
+			dc[x + 4] += qerror3 * floydst[0];		//next loop first
 			
-			dn[x - 1] += qerror[0] * floydst[1];
+			dn[x - 1] += qerror0 * floydst[1];
 
-			dn[x] += qerror[0] * floydst[2];
-			dn[x] += qerror[1] * floydst[1];
+			dn[x] += qerror0 * floydst[2];
+			dn[x] += qerror1 * floydst[1];
 
-			dn[x + 1] += qerror[0] * floydst[3];
-			dn[x + 1] += qerror[1] * floydst[2];
-			dn[x + 1] += qerror[2] * floydst[1];
+			dn[x + 1] += qerror0 * floydst[3];
+			dn[x + 1] += qerror1 * floydst[2];
+			dn[x + 1] += qerror2 * floydst[1];
 
-			dn[x + 2] += qerror[1] * floydst[3];
-			dn[x + 2] += qerror[2] * floydst[2];
-			dn[x + 2] += qerror[3] * floydst[1];
+			dn[x + 2] += qerror1 * floydst[3];
+			dn[x + 2] += qerror2 * floydst[2];
+			dn[x + 2] += qerror3 * floydst[1];
 
-			dn[x + 3] += qerror[2] * floydst[3];
-			dn[x + 3] += qerror[3] * floydst[2];
+			dn[x + 3] += qerror2 * floydst[3];
+			dn[x + 3] += qerror3 * floydst[2];
 
-			dn[x + 4] += qerror[3] * floydst[3];
+			dn[x + 4] += qerror3 * floydst[3];
 		}
 		for (; x < src_width; x++)
 		{
 			int v;
+			float vtmp;
 			float qerror;
 
-			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
-			dst[x]=(unsigned char)v;
+			vtmp = p[x] + dc[x] + mtr.randf()*scale - off;
+			v = min(max( (int)vtmp, 0), 255);
 			qerror = p[x] - v;
+
+			dst[x]=(unsigned char)v;
 			dn[x - 1] += qerror * floydst[1];
 			dn[x    ] += qerror * floydst[2];
 			//if (x != src_width - 1)				//width+1まで配列は確保してある
@@ -954,26 +961,27 @@ void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, cons
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
-			int vtmp[4];
-			float vtmp2[4];
+			//何故かdither>2では配列を使わない方が早く、dither=1では配列を使った方が早い dither=1ではvをdstに展開する処理がネック？
+			int v[4];
+			float vtmp[4];
 			float qerror[4];
 
-			for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
+			for (int ii = 0; ii < 4; ii++) {vtmp[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
 
-			vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-			qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
+			v[0] = min(max((int)vtmp[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerror[0] = p[x    ] - v[0];					//quant error ここのvtmpはintしたものを使う必要あり
 
-			vtmp2[1] += qerror[0] * floydst[0];
-			vtmp[1] = min(max((int)vtmp2[1], 0), 255);
-			qerror[1] = p[x + 1] - vtmp[1];
+			vtmp[1] += qerror[0] * floydst[0];
+			v[1] = min(max((int)vtmp[1], 0), 255);
+			qerror[1] = p[x + 1] - v[1];
 
-			vtmp2[2] += qerror[1] * floydst[0];
-			vtmp[2] = min(max((int)vtmp2[2], 0), 255);
-			qerror[2] = p[x + 2] - vtmp[2];
+			vtmp[2] += qerror[1] * floydst[0];
+			v[2] = min(max((int)vtmp[2], 0), 255);
+			qerror[2] = p[x + 2] - v[2];
 
-			vtmp2[3] += qerror[2] * floydst[0];
-			vtmp[3] = min(max((int)vtmp2[3], 0), 255);
-			qerror[3] = p[x + 3] - vtmp[3];
+			vtmp[3] += qerror[2] * floydst[0];
+			v[3] = min(max((int)vtmp[3], 0), 255);
+			qerror[3] = p[x + 3] - v[3];
 
 
 			/*for (int ii = 0; ii < 4; ii++) {
@@ -984,10 +992,10 @@ void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, cons
 			dn[x + ii]     += qerror[ii] * floydst[2];
 			dn[x + ii + 1] += qerror[ii] * floydst[3];
 			}*/
-			dst[x    ] = (unsigned char)vtmp[0];		//new pixel
-			dst[x + 1] = (unsigned char)vtmp[1];
-			dst[x + 2] = (unsigned char)vtmp[2];
-			dst[x + 3] = (unsigned char)vtmp[3];
+			dst[x    ] = (unsigned char)v[0];		//new pixel
+			dst[x + 1] = (unsigned char)v[1];
+			dst[x + 2] = (unsigned char)v[2];
+			dst[x + 3] = (unsigned char)v[3];
 
 			dc[x + 1] += qerror[0] * floydst[0];		//current
 			dc[x + 2] += qerror[1] * floydst[0];
@@ -1016,11 +1024,14 @@ void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, cons
 		for (; x < src_width; x++)
 		{
 			int v;
+			float vtmp;
 			float qerror;
 
-			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
-			dst[x]=(unsigned char)v;
+			vtmp=p[x  ] + dc[x  ] + 0.5f;
+			v = min(max( (int)vtmp, 0), 255);
 			qerror = p[x] - v;
+
+			dst[x]=(unsigned char)v;
 			dn[x - 1] += qerror * floydst[1];
 			dn[x    ] += qerror * floydst[2];
 			//if (x != src_width - 1)				//width+1まで配列は確保してある
