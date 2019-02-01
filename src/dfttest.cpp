@@ -680,19 +680,19 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 	const float scale = (mode-1) + 0.5f;
 	const float off = scale*0.5f - 0.5f;
 
-	float *dither = (float*)_aligned_malloc(2 * (width+8) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
-	float *dc = dither + 4;
-	float *dn = dc + width +4;	//-1にアクセスするのでポインタは足しておく
+	float *dither = (float*)_aligned_malloc(2 * (width+2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+	float *dc = dither + 1;
+	float *dn = dc + width +1;	//-1にアクセスするのでポインタは足しておく
 
 	MTRand mtr;
 
-	ZeroMemory(dc-4, (width+8) * sizeof(float));
+	ZeroMemory(dc-1, (width+2) * sizeof(float));
 
 	for (int y = ys; y<ye; y++)
 	{
 		int x;
 
-		ZeroMemory(dn-4, (width+8) * sizeof(float));
+		ZeroMemory(dn-1, (width+2) * sizeof(float));
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
@@ -946,18 +946,18 @@ void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, cons
 
 	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
 
-	float *dither = (float*)_aligned_malloc(2 * (width+8) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
-	float *dc = dither + 4;
-	float *dn = dc + width +4;	//-1にアクセスするのでポインタは足しておく
+	float *dither = (float*)_aligned_malloc(2 * (width+2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+	float *dc = dither + 1;
+	float *dn = dc + width + 1;	//-1にアクセスするのでポインタは足しておく
 
-	memset(dc-4, 0, (width+8) * sizeof(float));
+	ZeroMemory(dc-1, (width+2) * sizeof(float));
 
 
 	for (int y = ys; y<ye; y++)
 	{
 		int x;
 
-		memset(dn-4, 0, (width+8) * sizeof(float));
+		ZeroMemory(dn-1, (width+2) * sizeof(float));
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
