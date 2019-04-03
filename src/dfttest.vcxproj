@@ -119,7 +119,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>AVX_BUILD;WIN32;NDEBUG;_WINDOWS;_USRDLL;DFTTEST_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>HAVE_SSE2;AVX_BUILD;WIN32;NDEBUG;_WINDOWS;_USRDLL;DFTTEST_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <PrecompiledHeader />
@@ -132,6 +132,8 @@
       <OpenMPSupport>true</OpenMPSupport>
       <OmitFramePointers>true</OmitFramePointers>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <AssemblerOutput>AssemblyAndSourceCode</AssemblerOutput>
+      <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -174,6 +176,7 @@
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AdvancedVectorExtensions</EnableEnhancedInstructionSet>
     </ClCompile>
     <ClCompile Include="PlanarFrame.cpp" />
+    <ClCompile Include="SFMT\SFMT.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="avisynth.h" />
@@ -184,6 +187,7 @@
     <ClInclude Include="MersenneTwister.h" />
     <ClInclude Include="PlanarFrame.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="SFMT\SFMT.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="dfttest.rc" />

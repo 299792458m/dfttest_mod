@@ -73,6 +73,7 @@ Modifications:
 #include "dfttest.h"
 #include "dfttest_avx.h"
 #include <cassert>
+#include "SFMT/SFMT.h"
 
 PVideoFrame __stdcall dfttest::GetFrame(int n, IScriptEnvironment *env)
 {
@@ -574,8 +575,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
 {
 	if (mode<100){
-		if (mode==1) dither1_C_sub(p, dst, src_width, dst_pitch, width, mode, 0, src_height);
-		else dither_C_sub(p, dst, src_width, dst_pitch, width, mode, 0, src_height);
+		dither_C_sub(p, dst, src_width, dst_pitch, width, mode, 0, src_height);
 	}
 	else if (mode<200){
 		//縦に4分割でマルチスレッド化 元と演算結果は異なる(分割区間ごとにフロイド・スタインバーグがかかるので)
@@ -591,8 +591,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 				const float *p0 = p + ys*width;
 				unsigned char * dst0 = dst + ys*dst_pitch;
 
-				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
-				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
 			}
 #pragma omp section
 			{
@@ -601,8 +600,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 				const float *p0 = p + ys*width;
 				unsigned char * dst0 = dst + ys*dst_pitch;
 
-				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width,mode2,  ys, ye);
-				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
 			}
 
 #pragma omp section
@@ -612,8 +610,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 				const float *p0 = p + ys*width;
 				unsigned char * dst0 = dst + ys*dst_pitch;
 
-				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
-				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
 			}
 
 #pragma omp section
@@ -623,8 +620,7 @@ void dither_C(const float *p, unsigned char *dst, const int src_height,
 				const float *p0 = p + ys*width;
 				unsigned char * dst0 = dst + ys*dst_pitch;
 
-				if (mode2==1) dither1_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
-				else dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
+				dither_C_sub(p0, dst0, src_width, dst_pitch, width, mode2, ys, ye);
 			}
 		}
 	}
@@ -680,104 +676,137 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 	const float scale = (mode-1) + 0.5f;
 	const float off = scale*0.5f - 0.5f;
 
-	float *dither = (float*)_aligned_malloc(2 * (width+2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
-	float *dc = dither + 1;
-	float *dn = dc + width +1;	//-1にアクセスするのでポインタは足しておく
+	const int array_off = ALIGN_SIZE/sizeof(float);
+	float *dither = (float*)_aligned_malloc(2 * (width + array_off*2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+	float *dc = dither + array_off;
+	float *dn = dc + width + array_off;	//-1にアクセスするのでポインタは足しておく
 
-	MTRand mtr;
+	sfmt_t sfmt;
+	int size = max( SFMT_N32, ((width+3)/4)*4);	//sfmt_fill_array32の制限	(624/128+1)*4
+	unsigned int *sfmt_ia = (unsigned int *)_aligned_malloc( size * sizeof(unsigned int),ALIGN_SIZE);	//ランダム値の格納場所
 
-	ZeroMemory(dc-1, (width+2) * sizeof(float));
+
+	ZeroMemory(dc - array_off, (width + array_off*2) * sizeof(float));
 
 	for (int y = ys; y<ye; y++)
 	{
-		int x;
 
-		ZeroMemory(dn-1, (width+2) * sizeof(float));
+		if(mode == 1){
+			for (int ii=0;ii<width;ii++){
+				dc[ii] += p[ii] + 0.5f;
+			}
+		}
+		else{
+			sfmt_fill_array32(&sfmt,sfmt_ia,size);	//ランダム値生成
 
-		for (x = 0; x < src_width-3; x+=4)
+			for (int ii=0;ii<width;ii++){
+				dc[ii] += p[ii] + (float)sfmt_ia[ii] / (UINT_MAX-1) *scale -off;		//誤差がdc+1に拡散される前の値なので注意
+				//dc[ii] = p[ii] + (float)sfmt_ia[ii] / (UINT_MAX-1) *scale -off;
+
+				//dc[ii] = p[ii] + dc[ii] + dsfmt_genrand_close_open(&dsfmt)*scale - off;
+				//dc[ii] = p[ii] + dc[ii] + (sfmt_genrand_uint32(&sfmt)*1.0f/(UINT_MAX-1))*scale - off;
+				//dc[ii] = p[ii] + dc[ii] + (sfmt_ia[ii]*1.0f/(UINT_MAX-1))*scale - off;
+				//dc[ii] = p[ii] + dc[ii] + sfmt_fa[ii];
+			}
+		}
+
+		ZeroMemory(dn - array_off, (width + array_off*2) * sizeof(float));
+
+		register float qerr[4]={0,0,0,0};	//qerr[3]でxloopの誤差を受け渡し [3]は初期化要
+
+		int x=0;
+		for (; x < src_width-3; x+=4)
 		{
-			//何故かdither>2では配列を使わない方が早く、dither=1では配列を使った方が早い
-			int v0,v1,v2,v3;
-			float vtmp0,vtmp1,vtmp2,vtmp3;
-			float qerror0,qerror1,qerror2,qerror3;
+			int v[4];
+			float vtmp[4];
 
-			vtmp0 = p[x] + dc[x] + mtr.randf()*scale - off;
-			vtmp1 = p[x+1] + dc[x+1] + mtr.randf()*scale - off;
-			vtmp2 = p[x+2] + dc[x+2] + mtr.randf()*scale - off;
-			vtmp3 = p[x+3] + dc[x+3] + mtr.randf()*scale - off;
+			for (int ii=0;ii<4;ii++){
+				vtmp[ii] = dc[x+ii];
+			}
 
-			v0 = min(max((int)vtmp0, 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-			qerror0 = p[x    ] - v0;					//quant error ここのvtmpはintしたものを使う必要あり
+			vtmp[0] += qerr[3] * floydst[0];		//前xloopの残誤差を拡散
 
-			vtmp1 += qerror0 * floydst[0];
-			v1 = min(max((int)vtmp1, 0), 255);		//float→int→charが一番コストが少ない？(命令があるので)
-			qerror1 = p[x + 1] - v1;
+			for (int ii=0;ii<4;ii++){
+				qerr[ii] = p[x+ii];
+			}
 
-			vtmp2 += qerror1 * floydst[0];
-			v2 = min(max((int)vtmp2, 0), 255);
-			qerror2 = p[x + 2] - v2;
+			v[0] = min(max((int)vtmp[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+			qerr[0] -= v[0];							//quant error = p-v ここのvtmpはintしたものを使う必要あり
 
-			vtmp3 += qerror2 * floydst[0];
-			v3 = min(max((int)vtmp3, 0), 255);
-			qerror3 = p[x + 3] - v3;
+			vtmp[1] += qerr[0] * floydst[0];
+			v[1] = min(max((int)vtmp[1], 0), 255);
+			qerr[1] -= v[1];
+
+			vtmp[2] += qerr[1] * floydst[0];
+			v[2] = min(max((int)vtmp[2], 0), 255);
+			qerr[2] -= v[2];
+
+			vtmp[3] += qerr[2] * floydst[0];
+			v[3] = min(max((int)vtmp[3], 0), 255);
+			qerr[3] -= v[3];
 
 
 			/*
 			for (int ii = 0; ii < 4; ii++) {
 			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
-			dc[x + ii + 1] += qerror[ii] * floydst[0];
+			dc[x + ii + 1] += qerr[ii] * floydst[0];
 
-			dn[x + ii - 1] += qerror[ii] * floydst[1];
-			dn[x + ii]     += qerror[ii] * floydst[2];
-			dn[x + ii + 1] += qerror[ii] * floydst[3];
+			dn[x + ii - 1] += qerr[ii] * floydst[1];
+			dn[x + ii]     += qerr[ii] * floydst[2];
+			dn[x + ii + 1] += qerr[ii] * floydst[3];
 			}
 			*/
-			dst[x    ] = (unsigned char)v0;		//new pixel
-			dst[x + 1] = (unsigned char)v1;
-			dst[x + 2] = (unsigned char)v2;
-			dst[x + 3] = (unsigned char)v3;
+			dst[x    ] = (unsigned char)v[0];		//new pixel
+			dst[x + 1] = (unsigned char)v[1];
+			dst[x + 2] = (unsigned char)v[2];
+			dst[x + 3] = (unsigned char)v[3];
 
-			dc[x + 1] += qerror0 * floydst[0];		//current
-			dc[x + 2] += qerror1 * floydst[0];
-			dc[x + 3] += qerror2 * floydst[0];
-			dc[x + 4] += qerror3 * floydst[0];		//next loop first
+			//dc[x + 1] += qerr[0] * floydst[0];	//qerrで次のxloopへ誤差を渡すのでdcの更新は不要
+			//dc[x + 2] += qerr[1] * floydst[0];
+			//dc[x + 3] += qerr[2] * floydst[0];
+			//dc[x + 4] += qerr[3] * floydst[0];	//next x loop first
+
+			dn[x - 1] += qerr[0] * floydst[1];
+
+			dn[x] += qerr[0] * floydst[2];
+			dn[x] += qerr[1] * floydst[1];
+
+			dn[x + 1] += qerr[0] * floydst[3];
+			dn[x + 1] += qerr[1] * floydst[2];
+			dn[x + 1] += qerr[2] * floydst[1];
+
+			dn[x + 2] += qerr[1] * floydst[3];
+			dn[x + 2] += qerr[2] * floydst[2];
+			dn[x + 2] += qerr[3] * floydst[1];
+
+			dn[x + 3] += qerr[2] * floydst[3];
+			dn[x + 3] += qerr[3] * floydst[2];
+
+			dn[x + 4] += qerr[3] * floydst[3];
 			
-			dn[x - 1] += qerror0 * floydst[1];
-
-			dn[x] += qerror0 * floydst[2];
-			dn[x] += qerror1 * floydst[1];
-
-			dn[x + 1] += qerror0 * floydst[3];
-			dn[x + 1] += qerror1 * floydst[2];
-			dn[x + 1] += qerror2 * floydst[1];
-
-			dn[x + 2] += qerror1 * floydst[3];
-			dn[x + 2] += qerror2 * floydst[2];
-			dn[x + 2] += qerror3 * floydst[1];
-
-			dn[x + 3] += qerror2 * floydst[3];
-			dn[x + 3] += qerror3 * floydst[2];
-
-			dn[x + 4] += qerror3 * floydst[3];
 		}
+
+		float qerror=qerr[3];
 		for (; x < src_width; x++)
 		{
 			int v;
 			float vtmp;
-			float qerror;
 
-			vtmp = p[x] + dc[x] + mtr.randf()*scale - off;
+			vtmp = dc[x];	//p[x] + dc[x] + mtr.randf()*scale - off;
+			vtmp += qerror * floydst[0];
+
 			v = min(max( (int)vtmp, 0), 255);
 			qerror = p[x] - v;
 
 			dst[x]=(unsigned char)v;
+			//if (x != src_width - 1)				//width+array_offまで配列は確保してある
+			//dc[x + 1] += qerror * floydst[0];
+
+			//if (x != 0)							//-array_offまで配列は確保してある
 			dn[x - 1] += qerror * floydst[1];
 			dn[x    ] += qerror * floydst[2];
-			//if (x != src_width - 1)				//width+1まで配列は確保してある
-			//{
-			dc[x + 1] += qerror * floydst[0];
+			//if (x != src_width - 1)				//width+array_offまで配列は確保してある
 			dn[x + 1] += qerror * floydst[3];
-			//}
 		}
 
 		p += width;
@@ -788,11 +817,13 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 
 	}
 	_aligned_free(dither);
+	_aligned_free(sfmt_ia);
 
 }
-void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
+
+void dither_C_sub_test(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
 {
-	//未完
+	//特にベクトル化してあるわけでもなく、遅い・・・
 
 	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
 	const float scale = (mode-1) + 0.5f;
@@ -810,11 +841,11 @@ void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, c
 	{
 		int x;
 
-		memset(dn-1, 0, (width+2) * sizeof(float));
+		ZeroMemory(dn-1, (width+2) * sizeof(float));
 
 		for (x = 0; x < src_width-3; x+=4)
 		{
-			__m128i vtmp;
+			__m128i v_sse;
 			//float vtmp2[4];
 
 			__m128 qerror;
@@ -822,43 +853,78 @@ void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, c
 
 			//for (int ii = 0; ii < 4; ii++) {vtmp2[ii] = p[x+ii] + dc[x+ii] + mtr.randf()*scale - off;}
 			for (int ii = 0; ii < 4; ii++) {rand[ii] = mtr.randf();}
-			auto vtmp2_sse = _mm_loadu_ps(rand);	//mtr.randf	リトルエンディアン注意(レジスタには 128b←rand[0][1][2][3]→0b と入る)
-			auto p_sse  = _mm_loadu_ps(p+x);		//loaduには逆順に入れる命令がない・・・
-			auto dc_sse = _mm_loadu_ps(dc+x);
+			auto vtmp_sse  = _mm_loadu_ps(rand);	//mtr.randf
+			auto p_sse     = _mm_loadu_ps(p+x);		//p[x]
+			auto dc_sse    = _mm_loadu_ps(dc+x);	//dc[x]
 
 			auto tmpf_sse = _mm_set1_ps(scale);
-			vtmp2_sse	= _mm_mul_ps(vtmp2_sse,tmpf_sse);	//*scale 
+			vtmp_sse	= _mm_mul_ps(vtmp_sse,tmpf_sse);	//randf*scale 
 			tmpf_sse	= _mm_set1_ps(off);
-			vtmp2_sse	= _mm_sub_ps(vtmp2_sse,tmpf_sse);	//-off
-			vtmp2_sse	= _mm_add_ps(vtmp2_sse,p_sse);		//+p
-			vtmp2_sse	= _mm_add_ps(vtmp2_sse,dc_sse);		//+dc
+			vtmp_sse	= _mm_sub_ps(vtmp_sse,tmpf_sse);	//-off
+			vtmp_sse	= _mm_add_ps(vtmp_sse,p_sse);		//+p
+			vtmp_sse	= _mm_add_ps(vtmp_sse,dc_sse);		//+dc
 
 			//vtmp[0] = min(max((int)vtmp2[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
 			//qerror[0] = p[x    ] - vtmp[0];					//quant error ここのvtmpはintしたものを使う必要あり
 
-			float tmpf= vtmp2_sse.m128_f32[0];
-			int tmpi = min(max((int)tmpf, 0), 255);			
-			qerror.m128_f32[0] = p_sse.m128_f32[0] - tmpi;					//quant error ここのvtmpはintしたものを使う必要あり
-			vtmp.m128i_i32[0]  = tmpi;
+			__m128i tmpi_sse = _mm_cvttps_epi32(vtmp_sse);	//切り捨て 1個しか使わない・・・
+			tmpi_sse = _mm_and_si128(tmpi_sse,_mm_set_epi32(0,0,0,-1));	//最下位32bitのみ
+			tmpi_sse = _mm_packus_epi32(tmpi_sse,_mm_setzero_si128());	//32->16 0-65535	実は16bit演算にすると消せるような
+			tmpi_sse = _mm_packus_epi16(tmpi_sse,_mm_setzero_si128());	//16->8 0-255に変換 1個だけ必要 floatのままfloor,minmaxの方が早いかも？未確認
+			v_sse    = _mm_cvtepu8_epi32(tmpi_sse);		//32bitへ符号なし拡張
+			tmpf_sse = _mm_cvtepi32_ps(v_sse);		//floatへ
+			qerror = _mm_sub_ps(p_sse ,tmpf_sse);	//p[x    ] - v0
 
-			//vtmp2[1] += qerror[0] * floydst[0];
-			//vtmp[1] = min(max((int)vtmp2[1], 0), 255);
-			//qerror[1] = p[x + 1] - vtmp[1];
-			tmpf= vtmp2_sse.m128_f32[1] + qerror.m128_f32[0] * floydst[0];
-			tmpi = min(max((int)tmpf, 0), 255);
-			qerror.m128_f32[1] = p_sse.m128_f32[1] - tmpi;
-			vtmp.m128i_i32[1]  = tmpi;
+			
+			//vtmp1 += qerror0 * floydst[0];
+			//v1 = min(max((int)vtmp1, 0), 255);		//float→int→charが一番コストが少ない？(命令があるので)
+			//qerror1 = p[x + 1] - v1;
+			tmpf_sse = _mm_set_ps(0,0,0,floydst[0]);
+			tmpf_sse = _mm_mul_ps(qerror,tmpf_sse);		//
+			tmpf_sse = _mm_shuffle_ps(tmpf_sse,_mm_setzero_ps(),0x01);//3210 →0001
+			vtmp_sse = _mm_add_ps(tmpf_sse,vtmp_sse);	//vtmp1 += qerror0 * floydst[0];
 
-			tmpf= vtmp2_sse.m128_f32[2] + qerror.m128_f32[1] * floydst[0];
-			tmpi = min(max((int)tmpf, 0), 255);
-			qerror.m128_f32[2] = p_sse.m128_f32[2] - tmpi;
-			vtmp.m128i_i32[2]  = tmpi;
+			tmpi_sse = _mm_cvttps_epi32(vtmp_sse);	//切り捨て 1個しか使わない・・・
+			tmpi_sse = _mm_and_si128(tmpi_sse,_mm_set_epi32(0,0,-1,0));	//2つ目のみ
+			tmpi_sse = _mm_packus_epi32(tmpi_sse,_mm_setzero_si128());	//32->16 0-65535	実は16bit演算にすると消せるような
+			tmpi_sse = _mm_packus_epi16(tmpi_sse,_mm_setzero_si128());	//16->8 0-255に変換 1個だけ必要 floatのままfloor,minmaxの方が早いかも？未確認
+			tmpi_sse = _mm_cvtepu8_epi32(tmpi_sse);		//32bitへ符号なし拡張
+			v_sse = _mm_add_epi32(tmpi_sse,v_sse);		//v1 = min(max((int)vtmp1, 0), 255);
+			tmpi_sse = _mm_and_si128(v_sse,_mm_set_epi32(0,0,-1,0));
+			tmpf_sse = _mm_cvtepi32_ps(tmpi_sse);	//floatへ
+			qerror = _mm_sub_ps(qerror ,tmpf_sse);	//qerror1 = p[x + 1] - v1;
 
-			tmpf= vtmp2_sse.m128_f32[3] + qerror.m128_f32[2] * floydst[0];
-			tmpi = min(max((int)tmpf, 0), 255);
-			qerror.m128_f32[3] = p_sse.m128_f32[3] - tmpi;
-			vtmp.m128i_i32[3]  = tmpi;
+			//[2]
+			tmpf_sse = _mm_set_ps(0,0,floydst[0],0);
+			tmpf_sse = _mm_mul_ps(qerror,tmpf_sse);		//
+			tmpf_sse = _mm_shuffle_ps(_mm_setzero_ps(),tmpf_sse,0x40);
+			vtmp_sse = _mm_add_ps(tmpf_sse,vtmp_sse);	//vtmp1 += qerror0 * floydst[0];
 
+			tmpi_sse = _mm_cvttps_epi32(vtmp_sse);	//切り捨て 1個しか使わない・・・
+			tmpi_sse = _mm_and_si128(tmpi_sse,_mm_set_epi32(0,-1,0,0));	//3つ目のみ
+			tmpi_sse = _mm_packus_epi32(tmpi_sse,_mm_setzero_si128());	//32->16 0-65535	実は16bit演算にすると消せるような
+			tmpi_sse = _mm_packus_epi16(tmpi_sse,_mm_setzero_si128());	//16->8 0-255に変換 1個だけ必要 floatのままfloor,minmaxの方が早いかも？未確認
+			tmpi_sse = _mm_cvtepu8_epi32(tmpi_sse);		//32bitへ符号なし拡張
+			v_sse = _mm_add_epi32(tmpi_sse,v_sse);
+			tmpi_sse = _mm_and_si128(v_sse,_mm_set_epi32(0,-1,0,0));
+			tmpf_sse = _mm_cvtepi32_ps(tmpi_sse);	//floatへ
+			qerror = _mm_sub_ps(qerror ,tmpf_sse);	//qerror2 = p[x + 2] - v2;
+
+			//[3]
+			tmpf_sse = _mm_set_ps(0,floydst[0],0,0);
+			tmpf_sse = _mm_mul_ps(qerror,tmpf_sse);		//
+			tmpf_sse = _mm_shuffle_ps(_mm_setzero_ps(),tmpf_sse,0x80);
+			vtmp_sse = _mm_add_ps(tmpf_sse,vtmp_sse);	//vtmp1 += qerror0 * floydst[0];
+
+			tmpi_sse = _mm_cvttps_epi32(vtmp_sse);	//切り捨て 1個しか使わない・・・
+			tmpi_sse = _mm_and_si128(tmpi_sse,_mm_set_epi32(-1,0,0,0));	//3つ目のみ
+			tmpi_sse = _mm_packus_epi32(tmpi_sse,_mm_setzero_si128());	//32->16 0-65535	実は16bit演算にすると消せるような
+			tmpi_sse = _mm_packus_epi16(tmpi_sse,_mm_setzero_si128());	//16->8 0-255に変換 1個だけ必要 floatのままfloor,minmaxの方が早いかも？未確認
+			tmpi_sse = _mm_cvtepu8_epi32(tmpi_sse);		//32bitへ符号なし拡張
+			v_sse = _mm_add_epi32(tmpi_sse,v_sse);
+			tmpi_sse = _mm_and_si128(v_sse,_mm_set_epi32(-1,0,0,0));
+			tmpf_sse = _mm_cvtepi32_ps(tmpi_sse);	//floatへ
+			qerror = _mm_sub_ps(qerror ,tmpf_sse);	//qerror3 = p[x + 3] - v3;
 
 			/*for (int ii = 0; ii < 4; ii++) {
 			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
@@ -869,46 +935,59 @@ void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, c
 			dn[x + ii + 1] += qerror[ii] * floydst[3];
 			}*/
 			
-			dst[x    ] = (unsigned char)vtmp.m128i_i32[0];		//new pixel
-			dst[x + 1] = (unsigned char)vtmp.m128i_i32[1];
-			dst[x + 2] = (unsigned char)vtmp.m128i_i32[2];
-			dst[x + 3] = (unsigned char)vtmp.m128i_i32[3];
-			/*
-			auto ssei=_mm_shuffle_epi8(vtmp, _mm_set_epi8(-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,0x0c,0x08,0x04,0x00));
-			int test = _mm_cvtsi128_si32(ssei);
-			*(int*)(dst+x)=test;
-			*/
+			tmpi_sse = _mm_shuffle_epi8(v_sse,_mm_set_epi8(-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,12,8,4,0));	//該当の1byteずつintへパック
+			*(int *)(dst+x) = _mm_cvtsi128_si32(tmpi_sse);
 
-			/*dc[x + 1] += qerror.m128_f32[0] * floydst[0];		//current
-			dc[x + 2] += qerror.m128_f32[1] * floydst[0];
-			dc[x + 3] += qerror.m128_f32[2] * floydst[0];
-			dc[x + 4] += qerror.m128_f32[3] * floydst[0];		//next loop first */
-			tmpf_sse = _mm_set1_ps(floydst[0]);
-			tmpf_sse = _mm_mul_ps(tmpf_sse, qerror);
-			auto tmpf_sse2=_mm_load_ss(dc+x+4);		//最下位に読み込み
-			dc_sse = _mm_move_ss(dc_sse,tmpf_sse2);	//最下位をdc+x+4で上書き
-			dc_sse = _mm_permute_ps(dc_sse,0b00111001);	//最下位を一番上に持ってきてローテート シフトは整数じゃないとできなかったので
+			//dc[x + 1] += qerror.m128_f32[0] * floydst[0];		//current
+			//dc[x + 2] += qerror.m128_f32[1] * floydst[0];
+			//dc[x + 3] += qerror.m128_f32[2] * floydst[0];
+			//dc[x + 4] += qerror.m128_f32[3] * floydst[0];		//next loop first 
+			dc_sse = _mm_loadu_ps(dc+x+1);
+			tmpf_sse = _mm_mul_ps(_mm_set1_ps(floydst[0]), qerror);	//FMAで1回にできる
 			dc_sse = _mm_add_ps(dc_sse,tmpf_sse);
 			_mm_storeu_ps(dc+x+1, dc_sse);
 
 			dn[x - 1] += qerror.m128_f32[0] * floydst[1];
 
-			dn[x] += qerror.m128_f32[0] * floydst[2];
-			dn[x] += qerror.m128_f32[1] * floydst[1];
+			//dn[x] += qerror.m128_f32[0] * floydst[2];
+			//dn[x] += qerror.m128_f32[1] * floydst[1];
 
-			dn[x + 1] += qerror.m128_f32[0] * floydst[3];
-			dn[x + 1] += qerror.m128_f32[1] * floydst[2];
-			dn[x + 1] += qerror.m128_f32[2] * floydst[1];
+			//dn[x + 1] += qerror.m128_f32[0] * floydst[3];
+			//dn[x + 1] += qerror.m128_f32[1] * floydst[2];
+			//dn[x + 1] += qerror.m128_f32[2] * floydst[1];
 
-			dn[x + 2] += qerror.m128_f32[1] * floydst[3];
-			dn[x + 2] += qerror.m128_f32[2] * floydst[2];
-			dn[x + 2] += qerror.m128_f32[3] * floydst[1];
+			//dn[x + 2] += qerror.m128_f32[1] * floydst[3];
+			//dn[x + 2] += qerror.m128_f32[2] * floydst[2];
+			//dn[x + 2] += qerror.m128_f32[3] * floydst[1];
 
-			dn[x + 3] += qerror.m128_f32[2] * floydst[3];
-			dn[x + 3] += qerror.m128_f32[3] * floydst[2];
+			//dn[x + 3] += qerror.m128_f32[2] * floydst[3];
+			//dn[x + 3] += qerror.m128_f32[3] * floydst[2];
+
+			//dn[x + 4] += qerror.m128_f32[3] * floydst[3];
+
+			//auto dn_sse    = _mm_loadu_ps(dn+x);	//dc[x]
+			tmpf_sse = _mm_mul_ps(qerror,_mm_set_ps(0.0, 0.0, floydst[1],floydst[2]));
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			dn[x    ] += tmpf_sse.m128_f32[0];
+
+			tmpf_sse = _mm_mul_ps(qerror,_mm_set_ps(0.0,floydst[1],floydst[2],floydst[3]));
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			dn[x + 1] +=tmpf_sse.m128_f32[0];;
+
+			tmpf_sse = _mm_mul_ps(qerror,_mm_set_ps(floydst[1],floydst[2],floydst[3],0.0));
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			dn[x + 2] +=tmpf_sse.m128_f32[0];;
+
+			tmpf_sse = _mm_mul_ps(qerror,_mm_set_ps(floydst[2],floydst[3],0.0, 0.0));
+			tmpf_sse = _mm_hadd_ps(tmpf_sse,_mm_setzero_ps());
+			dn[x + 3] +=tmpf_sse.m128_f32[1];;
 
 			dn[x + 4] += qerror.m128_f32[3] * floydst[3];
 
+
+			//auto dn_sse = _mm_loadu_ps(dn+x);	//dn[x]
 
 
 
@@ -921,117 +1000,6 @@ void dither_C_sub_SSE(const float *p, unsigned char *dst, const int src_width, c
 			v = (int)min(max( p[x  ] + dc[x  ] + 0.5f, 0), 255);
 			dst[x]=(unsigned char)v;
 			qerror = p[x] - v;
-			dn[x - 1] += qerror * floydst[1];
-			dn[x    ] += qerror * floydst[2];
-			//if (x != src_width - 1)				//width+1まで配列は確保してある
-			//{
-			dc[x + 1] += qerror * floydst[0];
-			dn[x + 1] += qerror * floydst[3];
-			//}
-		}
-
-		p += width;
-		dst += dst_pitch;
-		float *tn = dn;
-		dn = dc;
-		dc = tn;
-
-	}
-	_aligned_free(dither);
-
-}
-
-void dither1_C_sub(const float *p, unsigned char *dst, const int src_width, const int dst_pitch, const int width, const int mode, const int ys, const int ye)
-{
-
-	const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
-
-	float *dither = (float*)_aligned_malloc(2 * (width+2) * sizeof(float),ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
-	float *dc = dither + 1;
-	float *dn = dc + width + 1;	//-1にアクセスするのでポインタは足しておく
-
-	ZeroMemory(dc-1, (width+2) * sizeof(float));
-
-
-	for (int y = ys; y<ye; y++)
-	{
-		int x;
-
-		ZeroMemory(dn-1, (width+2) * sizeof(float));
-
-		for (x = 0; x < src_width-3; x+=4)
-		{
-			//何故かdither>2では配列を使わない方が早く、dither=1では配列を使った方が早い dither=1ではvをdstに展開する処理がネック？
-			int v[4];
-			float vtmp[4];
-			float qerror[4];
-
-			for (int ii = 0; ii < 4; ii++) {vtmp[ii] = p[x+ii] + dc[x+ii] + 0.5f;}
-
-			v[0] = min(max((int)vtmp[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
-			qerror[0] = p[x    ] - v[0];					//quant error ここのvtmpはintしたものを使う必要あり
-
-			vtmp[1] += qerror[0] * floydst[0];
-			v[1] = min(max((int)vtmp[1], 0), 255);
-			qerror[1] = p[x + 1] - v[1];
-
-			vtmp[2] += qerror[1] * floydst[0];
-			v[2] = min(max((int)vtmp[2], 0), 255);
-			qerror[2] = p[x + 2] - v[2];
-
-			vtmp[3] += qerror[2] * floydst[0];
-			v[3] = min(max((int)vtmp[3], 0), 255);
-			qerror[3] = p[x + 3] - v[3];
-
-
-			/*for (int ii = 0; ii < 4; ii++) {
-			dst[x+ ii] = (unsigned char)vtmp[ii];		//new pixel
-			dc[x + ii + 1] += qerror[ii] * floydst[0];
-
-			dn[x + ii - 1] += qerror[ii] * floydst[1];
-			dn[x + ii]     += qerror[ii] * floydst[2];
-			dn[x + ii + 1] += qerror[ii] * floydst[3];
-			}*/
-			dst[x    ] = (unsigned char)v[0];		//new pixel
-			dst[x + 1] = (unsigned char)v[1];
-			dst[x + 2] = (unsigned char)v[2];
-			dst[x + 3] = (unsigned char)v[3];
-
-			dc[x + 1] += qerror[0] * floydst[0];		//current
-			dc[x + 2] += qerror[1] * floydst[0];
-			dc[x + 3] += qerror[2] * floydst[0];
-			dc[x + 4] += qerror[3] * floydst[0];		//next loop first
-
-			dn[x - 1] += qerror[0] * floydst[1];
-
-			dn[x] += qerror[0] * floydst[2];
-			dn[x] += qerror[1] * floydst[1];
-
-			dn[x + 1] += qerror[0] * floydst[3];
-			dn[x + 1] += qerror[1] * floydst[2];
-			dn[x + 1] += qerror[2] * floydst[1];
-
-			dn[x + 2] += qerror[1] * floydst[3];
-			dn[x + 2] += qerror[2] * floydst[2];
-			dn[x + 2] += qerror[3] * floydst[1];
-
-			dn[x + 3] += qerror[2] * floydst[3];
-			dn[x + 3] += qerror[3] * floydst[2];
-
-			dn[x + 4] += qerror[3] * floydst[3];
-
-		}
-		for (; x < src_width; x++)
-		{
-			int v;
-			float vtmp;
-			float qerror;
-
-			vtmp=p[x  ] + dc[x  ] + 0.5f;
-			v = min(max( (int)vtmp, 0), 255);
-			qerror = p[x] - v;
-
-			dst[x]=(unsigned char)v;
 			dn[x - 1] += qerror * floydst[1];
 			dn[x    ] += qerror * floydst[2];
 			//if (x != src_width - 1)				//width+1まで配列は確保してある
