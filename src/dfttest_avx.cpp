@@ -63,21 +63,21 @@ void proc0_AVX(const unsigned char *s0, const float *s1, float *d,
 	{
 		for (int v = 0; v < p1; v += 8)
 		{
+			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto s064 =_mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));//8ŒÂ‚Ì‚Ý
 			auto s0il= _mm_shuffle_epi8(s064,maskl);	//char->int ‰ºˆÊ8ŒÂ(64bit)‚Ì•ÏŠ· (1)
 			auto s0ih= _mm_shuffle_epi8(s064,maskh);
 			auto s0i = _mm256_castsi128_si256(s0il);		//‰ºˆÊ‚ðymm‚ÉƒŠƒl[ƒ€(0)
 			     s0i = _mm256_insertf128_si256(s0i,s0ih,1);	//ãˆÊ‚Éxmm‚ð‘}“ü(3latency)
 			auto s0f = _mm256_cvtepi32_ps(s0i);				//int->float
-			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto d_res = _mm256_mul_ps(s0f, s1f);
 			_mm256_storeu_ps(d + v, d_res);
-			_mm256_zeroupper();
 		}
 		s0 += p0;
 		s1 += p1;
 		d += p1;
 	}
+	_mm256_zeroupper();
 }
 
 void proc0_AVX2(const unsigned char *s0, const float *s1, float *d,
@@ -87,18 +87,18 @@ void proc0_AVX2(const unsigned char *s0, const float *s1, float *d,
 	{
 		for (int v = 0; v < p1; v += 8)
 		{
+			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto s064 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));//8ŒÂ‚Ì‚Ý
 			auto s0i = _mm256_cvtepu8_epi32(s064);	//char->int ‰ºˆÊ8ŒÂ(64bit)‚Ì•ÏŠ·	AVX2–½—ß
 			auto s0f = _mm256_cvtepi32_ps(s0i);			//int->float
-			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto d_res = _mm256_mul_ps(s0f, s1f);
 			_mm256_storeu_ps(d + v, d_res);
-			_mm256_zeroupper();
 		}
 		s0 += p0;
 		s1 += p1;
 		d += p1;
 	}
+	_mm256_zeroupper();
 }
 
 void proc1_AVX(const float *s0, const float *s1, float *d,
