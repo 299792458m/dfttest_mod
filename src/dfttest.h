@@ -113,15 +113,14 @@ void intcast_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
 void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_lsb, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
+void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width);
 void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode);
 void dither_C_sub(const float *p, unsigned char *dst,
 	const int src_width, const int dst_pitch, const int width, const int mode,  const int ys, const int ye);
 void dither_C_sub_org(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode);
-
-void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
-	const int src_width, const int dst_pitch, const int width);
 
 double getWinValue(double n, double size, int win, double beta);
 void createWindow(float *hw, const int tmode, const int tbsize, 
@@ -175,6 +174,8 @@ struct PS_INFO {
 		const int, const int);
 	void (*proc1)(const float*, const float*, float*, const int,
 		const int);
+	void (*intcast8)(const float *p, unsigned char *dst, const int src_height,
+		const int src_width, const int dst_pitch, const int width);
 	LPCRITICAL_SECTION csect;
 	HANDLE nextJob, jobFinished;
 };

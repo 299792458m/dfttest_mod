@@ -30,5 +30,6 @@ void proc0_AVX2(const unsigned char *s0, const float *s1, float *d, const int p0
 void proc1_AVX(const float *s0, const float *s1, float *d, const int p0, const int p1);
 void proc1_AVX2(const float *s0, const float *s1, float *d, const int p0, const int p1);
 void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt, const float *pmin, const float *pmax, const float *sigmas2);
+void intcast_AVX2_8(const float *p, unsigned char *dst, const int src_height, const int src_width, const int dst_pitch, const int width);
 
 #endif

@@ -571,6 +571,41 @@ void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_ls
 	::_controlfp (saved_rounding_mode, _MCW_RC);
 }
 
+void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width)
+{
+	auto sse2_05 = _mm_set_ps1(0.5f);
+	//auto sse2_255 = _mm_set_ps1(255);
+	//auto sse2_0 = _mm_set_ps1(0);
+	for (int y = 0; y<src_height; ++y)
+	{
+		int x=0;
+		for (; x < src_width; x += 8)
+		{
+			auto p_loop = _mm_loadu_ps(p + x);
+			auto p_loop2 = _mm_loadu_ps(p + x + 4);
+			auto add_loop = _mm_add_ps(sse2_05, p_loop);
+			auto add_loop2 = _mm_add_ps(sse2_05, p_loop2);
+			//auto max_loop = _mm_max_ps(add_loop, sse2_0);	//_mm_packs_epi32&_mm_packus_epi16があればminmaxは必要ない
+			//auto max_loop2 = _mm_max_ps(add_loop2, sse2_0);
+			//auto min_loop = _mm_min_ps(max_loop, sse2_255);
+			//auto min_loop2 = _mm_min_ps(max_loop2, sse2_255);
+			auto int1_loop = _mm_cvttps_epi32(add_loop);	//min_loop
+			auto int1_loop2 = _mm_cvttps_epi32(add_loop2);	//min_loop
+			auto packs_loop = _mm_packs_epi32(int1_loop, int1_loop2);
+			auto result = _mm_packus_epi16(packs_loop, packs_loop);
+			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x), result);
+		}
+		for (; x<src_width; ++x){
+			dst[x] = min(max((int)(p[x]+0.5f),0),255);
+		}
+
+		p += width;
+		dst += dst_pitch;
+	}
+}
+
+
 void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode)
 {
@@ -756,10 +791,6 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 			dn[x + ii + 1] += qerr[ii] * floydst[3];
 			}
 			*/
-			dst[x    ] = (unsigned char)v[0];		//new pixel
-			dst[x + 1] = (unsigned char)v[1];
-			dst[x + 2] = (unsigned char)v[2];
-			dst[x + 3] = (unsigned char)v[3];
 
 			//dc[x + 1] += qerr[0] * floydst[0];	//qerrで次のxloopへ誤差を渡すのでdcの更新は不要
 			//dc[x + 2] += qerr[1] * floydst[0];
@@ -784,6 +815,10 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 
 			dn[x + 4] += qerr[3] * floydst[3];
 			
+			dst[x    ] = (unsigned char)v[0];		//new pixel
+			dst[x + 1] = (unsigned char)v[1];
+			dst[x + 2] = (unsigned char)v[2];
+			dst[x + 3] = (unsigned char)v[3];
 		}
 
 		float qerror=qerr[3];
@@ -821,34 +856,6 @@ void dither_C_sub(const float *p, unsigned char *dst, const int src_width, const
 
 }
 
-void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
-	const int src_width, const int dst_pitch, const int width)
-{
-	auto sse2_05 = _mm_set_ps1(0.5f);
-	auto sse2_255 = _mm_set_ps1(255);
-	auto sse2_0 = _mm_set_ps1(0);
-	for (int y = 0; y<src_height; ++y)
-	{
-		for (int x = 0; x < src_width; x += 8)
-		{
-			auto p_loop = _mm_loadu_ps(p + x);
-			auto p_loop2 = _mm_loadu_ps(p + x + 4);
-			auto add_loop = _mm_add_ps(sse2_05, p_loop);
-			auto add_loop2 = _mm_add_ps(sse2_05, p_loop2);
-			auto max_loop = _mm_max_ps(add_loop, sse2_0);
-			auto max_loop2 = _mm_max_ps(add_loop2, sse2_0);
-			auto min_loop = _mm_min_ps(max_loop, sse2_255);
-			auto min_loop2 = _mm_min_ps(max_loop2, sse2_255);
-			auto int1_loop = _mm_cvttps_epi32(min_loop);
-			auto int1_loop2 = _mm_cvttps_epi32(min_loop2);
-			auto packs_loop = _mm_packs_epi32(int1_loop, int1_loop2);
-			auto result = _mm_packus_epi16(packs_loop, packs_loop);
-			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x), result);
-		}
-		p += width;
-		dst += dst_pitch;
-	}
-}
 
 PVideoFrame dfttest::GetFrame_S(int n, IScriptEnvironment *env)
 {
@@ -1033,6 +1040,7 @@ void dfttest::conv_result_plane_to_int (int width, int height, int b, int ebuff_
 	const int src_height = dstPF->GetHeight(b);
 	float *ebp = ebuff[ebuff_index]+width*((height-src_height)>>1)+((width-src_width)>>1);
 	long cpuflags = env->GetCPUFlags();
+	PS_INFO *pss = pssInfo[0];
 	if (lsb_out_flag)
 	{
 		assert (dstPF_lsb != 0);
@@ -1046,12 +1054,10 @@ void dfttest::conv_result_plane_to_int (int width, int height, int b, int ebuff_
 	}
 	else
 	{
-		if (dither)
+		if ((dither % 100) !=0)
 			dither_C(ebp,dstp,src_height,src_width,dst_pitch,width,dither);
-		else if (!(src_width&7) && (((cpuflags&CPUF_SSE2) && opt == 0) || opt == 3 || opt == 2))
-			intcast_SSE2_8(ebp,dstp,src_height,src_width,dst_pitch,width);
-		else
-			intcast_C(ebp,dstp,src_height,src_width,dst_pitch,width);
+		else 
+			pss->intcast8(ebp,dstp,src_height,src_width,dst_pitch,width);
 	}
 }
 
@@ -1931,6 +1937,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			}
 			pssInfo[i]->removeMean = removeMean_AVX;
 			pssInfo[i]->addMean = addMean_AVX;
+			pssInfo[i]->intcast8 = intcast_AVX2_8;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta - 1.0f) < 0.00005f)
@@ -1964,6 +1971,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			}
 			pssInfo[i]->removeMean = removeMean_AVX;
 			pssInfo[i]->addMean = addMean_AVX;
+			pssInfo[i]->intcast8 = intcast_SSE2_8;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta - 1.0f) < 0.00005f)
@@ -2000,6 +2008,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			}
 			pssInfo[i]->removeMean = removeMean_SSE;
 			pssInfo[i]->addMean = addMean_SSE;
+			pssInfo[i]->intcast8 = intcast_SSE2_8;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f)
@@ -2020,6 +2029,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			pssInfo[i]->proc1 = proc1_C;
 			pssInfo[i]->removeMean = removeMean_C;
 			pssInfo[i]->addMean = addMean_C;
+			pssInfo[i]->intcast8 = intcast_C;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f)

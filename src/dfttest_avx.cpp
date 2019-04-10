@@ -87,10 +87,10 @@ void proc0_AVX2(const unsigned char *s0, const float *s1, float *d,
 	{
 		for (int v = 0; v < p1; v += 8)
 		{
-			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto s064 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));//8ŒÂ‚Ì‚İ
 			auto s0i = _mm256_cvtepu8_epi32(s064);	//char->int ‰ºˆÊ8ŒÂ(64bit)‚Ì•ÏŠ·	AVX2–½—ß
 			auto s0f = _mm256_cvtepi32_ps(s0i);			//int->float
+			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto d_res = _mm256_mul_ps(s0f, s1f);
 			_mm256_storeu_ps(d + v, d_res);
 		}
@@ -128,9 +128,10 @@ void proc1_AVX(const float *s0, const float *s1, float *d,
 		mov edi,s1
 		mov edx,d
 		mov eax,p0
-	uloop:
+
 		mov ecx,p0
 		xor ebx,ebx
+	uloop:
 	vloop:
 		vmovups ymm0,[esi+ebx]
 		vmovups ymm1,[edi+ebx]
@@ -143,11 +144,12 @@ void proc1_AVX(const float *s0, const float *s1, float *d,
 		add ebx,32
 		sub ecx,8
 		jg vloop
+		mov ecx,p1
+		lea edx,[edx+ecx*4]
 		mov ecx,p0
 		lea esi,[esi+ecx*4]
 		lea edi,[edi+ecx*4]
-		mov ecx,p1
-		lea edx,[edx+ecx*4]
+		xor ebx,ebx
 		sub eax,1
 		jg uloop
 	}
@@ -155,7 +157,6 @@ void proc1_AVX(const float *s0, const float *s1, float *d,
 	_mm256_zeroupper();
 }
 
-//•Ê‚É‘¬‚­‚È‚ç‚È‚¢‚æ‚¤‚È
 void proc1_AVX2(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
@@ -168,7 +169,7 @@ void proc1_AVX2(const float *s0, const float *s1, float *d,
 			auto ymm1 = _mm256_loadu_ps(s1 + v);
 			auto ymm2 = _mm256_loadu_ps(d + v);
 
-			ymm0 = _mm256_fmadd_ps(ymm0, ymm1, ymm2);	//FMA3(•‚“®¬”‚ÍHaswellˆÈ~àAVX2 ®”‚È‚çSandyˆÈ~)‚ªg‚¦‚é‚È‚ç2–½—ß‚ğ1‚Â‚É‚Å‚«‚é‚ªA‚ ‚Ü‚è•Ï‚í‚ç‚È‚¢H
+			ymm0 = _mm256_fmadd_ps(ymm0, ymm1, ymm2);	//ŒÂ•Ê‚ÉŒvZ‚·‚é‚æ‚è¸“x‚Í‚‚­‚È‚é(Œ‹‰Ê‚Í]—ˆ‚©‚ç•Ï‚í‚é)‚Ì‚Å’ˆÓ FMA3(•‚“®¬”‚ÍHaswellˆÈ~àAVX2 ®”‚È‚çSandyˆÈ~)‚ªg‚¦‚é‚È‚ç2–½—ß‚ğ1‚Â‚É‚Å‚«‚é 
 			_mm256_storeu_ps(d + v, ymm0);
 		}
 		s0 += p0;
@@ -182,13 +183,14 @@ void proc1_AVX2(const float *s0, const float *s1, float *d,
 		mov edi,s1
 		mov edx,d
 		mov eax,p0
-	uloop:
+
 		mov ecx,p0
 		xor ebx,ebx
+	uloop:
 	vloop:
+		vmovups ymm2,[edx+ebx]
 		vmovups ymm0,[esi+ebx]
 		vmovups ymm1,[edi+ebx]
-		vmovups ymm2,[edx+ebx]
 
 		//vmulps ymm0,ymm0,ymm1
 		//vaddps ymm0,ymm0,ymm2
@@ -198,11 +200,12 @@ void proc1_AVX2(const float *s0, const float *s1, float *d,
 		add ebx,32
 		sub ecx,8
 		jg vloop
+		mov ecx,p1
+		lea edx,[edx+ecx*4]
 		mov ecx,p0
 		lea esi,[esi+ecx*4]
 		lea edi,[edi+ecx*4]
-		mov ecx,p1
-		lea edx,[edx+ecx*4]
+		xor ebx,ebx
 		sub eax,1
 		jg uloop
 	}
@@ -214,26 +217,93 @@ void proc1_AVX2(const float *s0, const float *s1, float *d,
 void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2)
 {
-	auto zero = _mm256_setzero_ps();
-	auto avx_1em15 = _mm256_set1_ps(1e-15f);
+	register auto avx_1em15 = _mm256_set1_ps(1e-15f);
+#ifdef _WIN64
+	register auto zero = _mm256_setzero_ps();
 	for (int h = 0; h<ccnt; h += 8)
 	{
 		auto dftc_loop   = _mm256_loadu_ps(dftc + h);		//dftc[h+ 3,2,1,0]
 		auto sigmas_loop = _mm256_loadu_ps(sigmas + h);
-		auto psd1 = _mm256_mul_ps(dftc_loop, dftc_loop);	//dftc[h+ 3,2,1,0].^2
-		auto psd2 = _mm256_permute_ps(psd1, 177);			//dftc[h+ 2,3,0,1].^2
-		auto psd  = _mm256_add_ps(psd1, psd2);				//psd=dftc[h+ 3,2,1,0].^2
+		auto psd = _mm256_mul_ps(dftc_loop, dftc_loop);		//dftc[h+ 3,2,1,0].^2
+		auto psd2 = _mm256_permute_ps(psd, 177);			//dftc[h+ 2,3,0,1].^2
+		psd  = _mm256_add_ps(psd, psd2);					//psd=dftc[h+ 3,2,1,0].^2
 
-		auto num = _mm256_sub_ps(psd, sigmas_loop);			// psd-sigmas
 		auto den = _mm256_add_ps(psd, avx_1em15);			// psd+1e-15f
 		den = _mm256_rcp_ps(den);							// 1/(psd+1e-15f)
+		auto num = _mm256_sub_ps(psd, sigmas_loop);			// psd-sigmas
 		auto res = _mm256_mul_ps(num, den);					// (psd-sigmas[h])/(psd+1e-15f)
 		res = _mm256_max_ps(res,zero);				// max(res,0)
 		res = _mm256_mul_ps(res,dftc_loop);			// res *= dftc
 		_mm256_storeu_ps(dftc + h, res);
 	}
+#else
+	__asm
+	{
+		mov esi,dftc
+		mov edi,sigmas
+		mov eax,ccnt
+		xor ecx,ecx
+		vxorps ymm4, ymm4, ymm4
+		vmovaps ymm5,avx_1em15
+	hloop:
+		vmovups ymm1,[esi+ecx]	//dftc
+		vmovups ymm0,[edi+ecx]	//sigmas
+		vmulps	ymm2, ymm1, ymm1	//dftc[h+ 3,2,1,0].^2
+		vpermilps ymm3, ymm2, 177
+		vaddps	ymm2, ymm2, ymm3	//psd
+
+		vaddps	ymm3, ymm2, ymm5	//den=psd+1e-15f
+		vrcpps	ymm3, ymm3
+
+		vsubps	ymm2, ymm2, ymm0	//num=psd-sigmas
+
+		vmulps	ymm0, ymm2, ymm3	//num/den
+		vmaxps	ymm0, ymm0, ymm4	//max num,zero
+
+		vmulps	ymm0, ymm0, ymm1	//dftc*=res
+
+		vmovups [esi+ecx],ymm0
+
+		add ecx,32
+		sub eax,8
+		jg hloop
+
+	}
+#endif
 	_mm256_zeroupper();
 }
+
+void intcast_AVX2_8(const float *p, unsigned char *dst, const int src_height,
+	const int src_width, const int dst_pitch, const int width)
+{
+	auto avx_05 = _mm256_set1_ps(0.5f);
+	for (int y = 0; y<src_height; ++y)
+	{
+		int x=0;
+		for (; x < src_width; x += 16)
+		{
+			auto p_loop = _mm256_loadu_ps(p + x);
+			auto p_loop2 = _mm256_loadu_ps(p + x + 8);
+			auto add_loop = _mm256_add_ps(avx_05, p_loop);
+			auto add_loop2 = _mm256_add_ps(avx_05, p_loop2);
+			auto int1_loop = _mm256_cvttps_epi32(add_loop);
+			auto int1_loop2 = _mm256_cvttps_epi32(add_loop2);
+			auto packs_loop = _mm256_packs_epi32(int1_loop, int1_loop2);
+			auto result = _mm256_packus_epi16(packs_loop, packs_loop);
+			result = _mm256_permutevar8x32_epi32(result,_mm256_set_epi32(0,0,0,0,5,1,4,0));
+			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x), _mm256_castsi256_si128(result));
+		}
+		for (; x<src_width; ++x){
+			//dst[x] = min(max((int)(p[x]+0.5f),0),255);
+			int tmp = (int)(p[x]+0.5f);
+			dst[x] = (tmp <0) ? 0 : (tmp >255) ? 255 : tmp;
+		}
+		p += width;
+		dst += dst_pitch;
+	}
+	_mm256_zeroupper();
+}
+
 
 #endif
 
