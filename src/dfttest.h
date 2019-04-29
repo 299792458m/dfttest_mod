@@ -64,10 +64,10 @@ void func_1(void *ps);
 int num_processors();
 
 void removeMean_C(float *dftc, const float *dftgc, const int ccnt, float *dftc2);
-void removeMean_SSE(float *dftc, const float *dftgc, const int ccnt, float *dftc2);
+void removeMean_SSE_4(float *dftc, const float *dftgc, const int ccnt, float *dftc2);
 
 void addMean_C(float *dftc, const int ccnt, const float *dftc2);
-void addMean_SSE(float *dftc, const int ccnt, const float *dftc2);
+void addMean_SSE_4(float *dftc, const int ccnt, const float *dftc2);
 
 void filter_0_C(float *dftc, const float *sigmas, const int ccnt,
 	const float *pmin, const float *pmax, const float *sigmas2);
@@ -113,7 +113,7 @@ void intcast_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
 void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_lsb, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
-void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
+void intcast_SSE2(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width);
 void dither_C(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width, const int mode);

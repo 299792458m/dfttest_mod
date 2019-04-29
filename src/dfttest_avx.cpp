@@ -23,27 +23,28 @@
 #ifdef AVX_BUILD
 #include "dfttest_avx.h"
 
-void removeMean_AVX(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
+void removeMean_AVX_8(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 {
-	const float gf = dftc[0] / dftgc[0];
-	auto gf_asm = _mm256_broadcast_ss(reinterpret_cast<const float*>(&gf));
+	auto gf_asm = _mm256_set1_ps(dftc[0] / dftgc[0]);
 
-	for (int h = 0; h < ccnt; h += 8)
+	for (int h=0; h < ccnt; h += 8)
 	{
-		auto dftc_loop   = _mm256_loadu_ps(dftc + h);
 		auto dftgc_loop  = _mm256_loadu_ps(dftgc + h);
-		//auto dftc2_loop  = _mm256_loadu_ps(dftc2 + h);
+		auto dftc_loop   = _mm256_loadu_ps(dftc + h);
+
 		auto dftc2_result= _mm256_mul_ps(gf_asm, dftgc_loop);
 		auto dftc_result = _mm256_sub_ps(dftc_loop, dftc2_result);
+
 		_mm256_storeu_ps(dftc2 + h, dftc2_result);
 		_mm256_storeu_ps(dftc  + h, dftc_result);
 	}
 	_mm256_zeroupper();
+
 }
 
-void addMean_AVX(float *dftc, const int ccnt, const float *dftc2)
+void addMean_AVX_8(float *dftc, const int ccnt, const float *dftc2)
 {
-	for (int h = 0; h < ccnt; h += 8)
+	for (int h=0; h < ccnt; h += 8)
 	{
 		auto dftc_loop = _mm256_loadu_ps(dftc + h);
 		auto dftc2_loop = _mm256_loadu_ps(dftc2 + h);
@@ -51,20 +52,21 @@ void addMean_AVX(float *dftc, const int ccnt, const float *dftc2)
 		_mm256_storeu_ps(dftc + h, dftc_result);
 	}
 	_mm256_zeroupper();
+
 }
 
-void proc0_AVX(const unsigned char *s0, const float *s1, float *d,
+void proc0_AVX_8(const unsigned char *s0, const float *s1, float *d,
 	const int p0, const int p1, const int /*offset_lsb*/)
 {
 	auto maskl = _mm_set_epi8(-1,-1,-1,3,-1,-1,-1,2,-1,-1,-1,1,-1,-1,-1,0);
 	auto maskh = _mm_set_epi8(-1,-1,-1,7,-1,-1,-1,6,-1,-1,-1,5,-1,-1,-1,4);
 
-	for (int u = 0; u<p1; ++u)
+	for (int u = 0; u < p1; ++u)
 	{
 		for (int v = 0; v < p1; v += 8)
 		{
 			auto s1f = _mm256_loadu_ps(s1 + v);
-			auto s064 =_mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));//8ŒÂ‚Ì‚İ
+			auto s064= _mm_loadu_si64(s0 + v);	//8ŒÂ‚Ì‚İ
 			auto s0il= _mm_shuffle_epi8(s064,maskl);	//char->int ‰ºˆÊ8ŒÂ(64bit)‚Ì•ÏŠ· (1)
 			auto s0ih= _mm_shuffle_epi8(s064,maskh);
 			auto s0i = _mm256_castsi128_si256(s0il);		//‰ºˆÊ‚ğymm‚ÉƒŠƒl[ƒ€(0)
@@ -80,17 +82,18 @@ void proc0_AVX(const unsigned char *s0, const float *s1, float *d,
 	_mm256_zeroupper();
 }
 
-void proc0_AVX2(const unsigned char *s0, const float *s1, float *d,
+void proc0_AVX2_8(const unsigned char *s0, const float *s1, float *d,
 	const int p0, const int p1, const int /*offset_lsb*/)
 {
-	for (int u = 0; u<p1; ++u)
+	for (int u = 0; u < p1; ++u)
 	{
 		for (int v = 0; v < p1; v += 8)
 		{
-			auto s064 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));//8ŒÂ‚Ì‚İ
+			auto s064 = _mm_loadu_si64(s0 + v);	//8ŒÂ‚Ì‚İ
+			auto s1f = _mm256_loadu_ps(s1 + v);
+
 			auto s0i = _mm256_cvtepu8_epi32(s064);	//char->int ‰ºˆÊ8ŒÂ(64bit)‚Ì•ÏŠ·	AVX2–½—ß
 			auto s0f = _mm256_cvtepi32_ps(s0i);			//int->float
-			auto s1f = _mm256_loadu_ps(s1 + v);
 			auto d_res = _mm256_mul_ps(s0f, s1f);
 			_mm256_storeu_ps(d + v, d_res);
 		}
@@ -101,11 +104,11 @@ void proc0_AVX2(const unsigned char *s0, const float *s1, float *d,
 	_mm256_zeroupper();
 }
 
-void proc1_AVX(const float *s0, const float *s1, float *d,
+void proc1_AVX_8(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
 #ifdef _WIN64	//‚È‚º‚©Intrinsics‚¾‚Æasm‚æ‚è’x‚¢ loopˆ—‚Ì·H
-	for (int u = 0; u<p0; u++)
+	for (int u = 0; u < p0; u++)
 	{
 		for (int v = 0; v < p0; v += 8)
 		{
@@ -157,11 +160,11 @@ void proc1_AVX(const float *s0, const float *s1, float *d,
 	_mm256_zeroupper();
 }
 
-void proc1_AVX2(const float *s0, const float *s1, float *d,
+void proc1_AVX2_8(const float *s0, const float *s1, float *d,
 	const int p0, const int p1)
 {
 #ifdef _WIN64
-	for (int u = 0; u<p0; u++)
+	for (int u = 0; u < p0; u++)
 	{
 		for (int v = 0; v < p0; v += 8)
 		{
@@ -188,9 +191,9 @@ void proc1_AVX2(const float *s0, const float *s1, float *d,
 		xor ebx,ebx
 	uloop:
 	vloop:
-		vmovups ymm2,[edx+ebx]
 		vmovups ymm0,[esi+ebx]
 		vmovups ymm1,[edi+ebx]
+		vmovups ymm2,[edx+ebx]
 
 		//vmulps ymm0,ymm0,ymm1
 		//vaddps ymm0,ymm0,ymm2
@@ -222,18 +225,18 @@ void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt,
 	register auto zero = _mm256_setzero_ps();
 	for (int h = 0; h<ccnt; h += 8)
 	{
-		auto dftc_loop   = _mm256_loadu_ps(dftc + h);		//dftc[h+ 3,2,1,0]
-		auto sigmas_loop = _mm256_loadu_ps(sigmas + h);
-		auto psd = _mm256_mul_ps(dftc_loop, dftc_loop);		//dftc[h+ 3,2,1,0].^2
-		auto psd2 = _mm256_permute_ps(psd, 177);			//dftc[h+ 2,3,0,1].^2
-		psd  = _mm256_add_ps(psd, psd2);					//psd=dftc[h+ 3,2,1,0].^2
+		auto dft = _mm256_loadu_ps(dftc + h);		//dftc[h+ 3,2,1,0]
+		auto psd = _mm256_mul_ps(dft, dft);			//dftc[h+ 3,2,1,0].^2
+		auto psd2= _mm256_permute_ps(psd, 177);		//dftc[h+ 2,3,0,1].^2
+		     psd = _mm256_add_ps(psd, psd2);		//psd=dftc[h+ 3,2,1,0].^2
 
-		auto den = _mm256_add_ps(psd, avx_1em15);			// psd+1e-15f
-		den = _mm256_rcp_ps(den);							// 1/(psd+1e-15f)
-		auto num = _mm256_sub_ps(psd, sigmas_loop);			// psd-sigmas
-		auto res = _mm256_mul_ps(num, den);					// (psd-sigmas[h])/(psd+1e-15f)
-		res = _mm256_max_ps(res,zero);				// max(res,0)
-		res = _mm256_mul_ps(res,dftc_loop);			// res *= dftc
+		auto den = _mm256_add_ps(psd, avx_1em15);	// psd+1e-15f
+		     den = _mm256_rcp_ps(den);				// 1/(psd+1e-15f)
+		auto sig = _mm256_loadu_ps(sigmas + h);
+		auto num = _mm256_sub_ps(psd, sig);			// psd-sigmas
+		auto res = _mm256_mul_ps(num, den);			// (psd-sigmas[h])/(psd+1e-15f)
+		     res = _mm256_max_ps(res,zero);			// max(res,0)
+		     res = _mm256_mul_ps(res,dft);			// res *= dftc
 		_mm256_storeu_ps(dftc + h, res);
 	}
 #else
@@ -243,11 +246,10 @@ void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt,
 		mov edi,sigmas
 		mov eax,ccnt
 		xor ecx,ecx
-		vxorps ymm4, ymm4, ymm4
+		vxorps ymm4, ymm4, ymm4	//zero
 		vmovaps ymm5,avx_1em15
 	hloop:
 		vmovups ymm1,[esi+ecx]	//dftc
-		vmovups ymm0,[edi+ecx]	//sigmas
 		vmulps	ymm2, ymm1, ymm1	//dftc[h+ 3,2,1,0].^2
 		vpermilps ymm3, ymm2, 177
 		vaddps	ymm2, ymm2, ymm3	//psd
@@ -255,6 +257,7 @@ void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt,
 		vaddps	ymm3, ymm2, ymm5	//den=psd+1e-15f
 		vrcpps	ymm3, ymm3
 
+		vmovups ymm0,[edi+ecx]	//sigmas
 		vsubps	ymm2, ymm2, ymm0	//num=psd-sigmas
 
 		vmulps	ymm0, ymm2, ymm3	//num/den
@@ -273,7 +276,7 @@ void filter_0_AVX(float *dftc, const float *sigmas, const int ccnt,
 	_mm256_zeroupper();
 }
 
-void intcast_AVX2_8(const float *p, unsigned char *dst, const int src_height,
+void intcast_AVX2(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width)
 {
 	auto avx_05 = _mm256_set1_ps(0.5f);

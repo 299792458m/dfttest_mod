@@ -1,4 +1,8 @@
 mod by 299792458m
+190410
+-dither>=2‚ÌŽž‚Ì—””­¶‚ðSFMT‚É•ÏX‚µ‚‘¬‰»
+-ditherˆ—‚ð‘½­’ö‚‘¬‰»
+
 190201
 -dither>=2‚ÌŽž‚É‚¿‚å‚Á‚Æ‘‚­‚È‚Á‚½
 

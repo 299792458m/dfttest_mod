@@ -571,7 +571,7 @@ void intcast_C_16_bits(const float *p, unsigned char *dst, unsigned char *dst_ls
 	::_controlfp (saved_rounding_mode, _MCW_RC);
 }
 
-void intcast_SSE2_8(const float *p, unsigned char *dst, const int src_height,
+void intcast_SSE2(const float *p, unsigned char *dst, const int src_height,
 	const int src_width, const int dst_pitch, const int width)
 {
 	auto sse2_05 = _mm_set_ps1(0.5f);
@@ -1131,10 +1131,9 @@ void removeMean_C(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 	}
 }
 
-void removeMean_SSE(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
+void removeMean_SSE_4(float *dftc, const float *dftgc, const int ccnt, float *dftc2)
 {
-	const float gf = dftc[0] / dftgc[0];
-	auto gf_asm = _mm_load_ps1(reinterpret_cast<const float*>(&gf));
+	auto gf_asm = _mm_set1_ps( dftc[0] / dftgc[0] );
 	for (int h = 0; h<ccnt; h += 4)
 	{
 		auto dftc_loop = _mm_loadu_ps(dftc + h);
@@ -1163,7 +1162,7 @@ void addMean_C(float *dftc, const int ccnt, const float *dftc2)
 
 }
 
-void addMean_SSE(float *dftc, const int ccnt, const float *dftc2)
+void addMean_SSE_4(float *dftc, const int ccnt, const float *dftc2)
 {
 	for (int h = 0; h<ccnt; h += 4)
 	{
@@ -1922,22 +1921,26 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		{	//AVX2‚ÌŽž
 			if (!(sbsize & 7))
 			{
-				pssInfo[i]->proc0 = proc0_AVX2;
-				pssInfo[i]->proc1 = proc1_AVX2;
+				pssInfo[i]->proc0 = proc0_AVX2_8;
+				pssInfo[i]->proc1 = proc1_AVX2_8;
+				pssInfo[i]->removeMean = removeMean_AVX_8;
+				pssInfo[i]->addMean    = addMean_AVX_8;
 			}
 			else if (!(sbsize & 3))
 			{
 				pssInfo[i]->proc0 = proc0_SSE2_4;
 				pssInfo[i]->proc1 = proc1_SSE_4;
+				pssInfo[i]->removeMean = removeMean_SSE_4;
+				pssInfo[i]->addMean    = addMean_SSE_4;
 			}
 			else
 			{
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
+				pssInfo[i]->removeMean = removeMean_C;
+				pssInfo[i]->addMean    = addMean_C;
 			}
-			pssInfo[i]->removeMean = removeMean_AVX;
-			pssInfo[i]->addMean = addMean_AVX;
-			pssInfo[i]->intcast8 = intcast_AVX2_8;
+			pssInfo[i]->intcast8 = intcast_AVX2;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta - 1.0f) < 0.00005f)
@@ -1956,22 +1959,26 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 		{	//AVX‚ÌŽž
 			if (!(sbsize & 7))
 			{
-				pssInfo[i]->proc0 = proc0_AVX;
-				pssInfo[i]->proc1 = proc1_AVX;
+				pssInfo[i]->proc0 = proc0_AVX_8;
+				pssInfo[i]->proc1 = proc1_AVX_8;
+				pssInfo[i]->removeMean = removeMean_AVX_8;
+				pssInfo[i]->addMean    = addMean_AVX_8;
 			}
 			else if (!(sbsize & 3))
 			{
 				pssInfo[i]->proc0 = proc0_SSE2_4;
 				pssInfo[i]->proc1 = proc1_SSE_4;
+				pssInfo[i]->removeMean = removeMean_SSE_4;
+				pssInfo[i]->addMean    = addMean_SSE_4;
 			}
 			else
 			{
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
+				pssInfo[i]->removeMean = removeMean_C;
+				pssInfo[i]->addMean    = addMean_C;
 			}
-			pssInfo[i]->removeMean = removeMean_AVX;
-			pssInfo[i]->addMean = addMean_AVX;
-			pssInfo[i]->intcast8 = intcast_SSE2_8;
+			pssInfo[i]->intcast8 = intcast_SSE2;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta - 1.0f) < 0.00005f)
@@ -1995,20 +2002,24 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
 			{
 				pssInfo[i]->proc0 = proc0_SSE2_8;
 				pssInfo[i]->proc1 = proc1_SSE_8;
+				pssInfo[i]->removeMean = removeMean_SSE_4;
+				pssInfo[i]->addMean    = addMean_SSE_4;
 			}
 			else if (!(sbsize&3))
 			{
 				pssInfo[i]->proc0 = proc0_SSE2_4;
 				pssInfo[i]->proc1 = proc1_SSE_4;
+				pssInfo[i]->removeMean = removeMean_SSE_4;
+				pssInfo[i]->addMean    = addMean_SSE_4;
 			}
 			else
 			{
 				pssInfo[i]->proc0 = proc0_C;
 				pssInfo[i]->proc1 = proc1_C;
+				pssInfo[i]->removeMean = removeMean_C;
+				pssInfo[i]->addMean    = addMean_C;
 			}
-			pssInfo[i]->removeMean = removeMean_SSE;
-			pssInfo[i]->addMean = addMean_SSE;
-			pssInfo[i]->intcast8 = intcast_SSE2_8;
+			pssInfo[i]->intcast8 = intcast_SSE2;
 			if (ftype == 0)
 			{
 				if (fabsf(_f0beta-1.0f) < 0.00005f)
