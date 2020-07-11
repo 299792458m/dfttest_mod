@@ -1,9 +1,9 @@
 # dfttest
 
-git�̎g�������ǂ��킩���ĂȂ��̂ŕςȂƂ��낪�����Ă��C�ɂ��Ȃ��ł�������
+gitの使い方が良くわかってないので変なところがあっても気にしないでください
 
--�x�[�X��dffttest1.9.6�ɕύX<br>
--�����̎g���t�B���^�̍œK������ �����܂Ŏ����̊��ő����Ȃ�悤�ɂ�������<br>
+- ベースをdffttest1.9.6に変更<br>
+- 自分の使うフィルタの最適化調整 あくまで自分の環境で速くなるようにしただけ<br>
  
 this is a fork of dfttest 1.9.6 and some speed tune for my enviroment is added.<br>
 mainly tuned at dither function(it costs wastefully a lot).<br>
