@@ -34,12 +34,11 @@ void removeMean_AVX(float* dftc, const float* dftgc, const int ccnt, float* dftc
 
   for (int h = 0; h < ccnt; h += 8)
   {
-    auto dftc_loop = _mm256_loadu_ps(dftc + h);
     auto dftgc_loop = _mm256_loadu_ps(dftgc + h);
-    auto dftc2_loop = _mm256_loadu_ps(dftc2 + h);
+    auto dftc_loop = _mm256_loadu_ps(dftc + h);
     auto dftc2_result = _mm256_mul_ps(gf_asm, dftgc_loop);
-    _mm256_storeu_ps(dftc2 + h, dftc2_result);
     auto dftc_result = _mm256_sub_ps(dftc_loop, dftc2_result);
+    _mm256_storeu_ps(dftc2 + h, dftc2_result);
     _mm256_storeu_ps(dftc + h, dftc_result);
   }
   _mm256_zeroupper();
@@ -74,7 +73,7 @@ void filter_0_AVX_8(float* dftc, const float* sigmas, const int ccnt,
     auto sigmas_loop = _mm256_loadu_ps(sigmas + h); // S S s s // FIXME check: adjacent Sigma values should be the same!
     auto squares = _mm256_mul_ps(dftc_loop, dftc_loop); //R*R I*I r*r i*i
 
-    auto sumofsquares = _mm256_add_ps(squares, _mm256_shuffle_ps(squares, squares, _MM_SHUFFLE(2, 3, 0, 1)));
+    auto sumofsquares = _mm256_add_ps(squares, _mm256_permute_ps(squares, 177));
     // R*R+I*I R*R+I*I r*r+i*i r*r+i*i from now SQ SQ sq sq
 
     auto diff = _mm256_sub_ps(sumofsquares, sigmas_loop); // SQ-S SQ-S sq-s sq-s // . is undefined

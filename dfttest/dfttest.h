@@ -55,6 +55,8 @@ typedef void (*fftwf_execute_dft_c2r_proc) (fftwf_plan, fftwf_complex*, float*);
 
 #define EXTRA(a,b) (((a)%(b))?((b)-((a)%(b))):0)
 
+#define ALIGN_SIZE 32
+
 unsigned __stdcall threadPool(void* ps);
 void func_0(void* ps);
 void func_1(void* ps);

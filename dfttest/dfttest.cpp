@@ -101,6 +101,7 @@ Modifications:
 #include "smmintrin.h"
 #include <cassert>
 #include <mutex>
+#include "SFMT/SFMT.h"
 
 // FFTW is not thread-safe, need to guard around its functions (except fftw_execute).
 // http://www.fftw.org/fftw3_doc/Thread-safety.html#Thread-safety
@@ -744,10 +745,11 @@ void intcast_float_to_stacked16_C(const float* p, unsigned char* dst, unsigned c
   //::_controlfp(saved_rounding_mode, _MCW_RC);
 }
 
+
 void dither_C(const float* p, unsigned char* dst, const int src_height,
   const int src_width, const int dst_pitch, const int width, const int mode)
 {
-  float* dither = (float*)malloc(2 * width * sizeof(float));
+  float* dither = (float*)_aligned_malloc(2 * width * sizeof(float),ALIGN_SIZE);
   float* dc = dither;
   float* dn = dither + width;
   const float scale = (mode - 1) + 0.5f;
@@ -757,19 +759,19 @@ void dither_C(const float* p, unsigned char* dst, const int src_height,
   for (int y = 0; y < src_height; ++y)
   {
     memset(dn, 0, width * sizeof(float));
+    float qerror = 0;
     for (int x = 0; x < src_width; ++x)
     {
       const int v = mode == 1 ?
-        (int)(p[x] + dc[x] + 0.5f) :
-        (int)(p[x] + mtr.randf() * scale - off + dc[x] + 0.5f);
+        (int)(p[x] + dc[x] + 0.5f + qerror * 0.4375f) :
+        (int)(p[x] + dc[x] + 0.5f + qerror * 0.4375f + mtr.randf() * scale - off);
       dst[x] = min(max(v, 0), 255);
-      const float qerror = p[x] - dst[x];
+      qerror = p[x] - dst[x];
       if (x != 0)
         dn[x - 1] += qerror * 0.1875f;
       dn[x] += qerror * 0.3125f;
       if (x != src_width - 1)
       {
-        dc[x + 1] += qerror * 0.4375f;
         dn[x + 1] += qerror * 0.0625f;
       }
     }
@@ -779,7 +781,154 @@ void dither_C(const float* p, unsigned char* dst, const int src_height,
     dn = dc;
     dc = tn;
   }
-  free(dither);
+  _aligned_free(dither);
+}
+
+void dither_C_opt(const float* p, unsigned char* dst, const int src_height,
+    const int src_width, const int dst_pitch, const int width, const int mode)
+{
+
+    const float floydst[4] = { 7.0 / 16, 3.0 / 16, 5.0 / 16, 1.0 / 16 };
+    const float scale = (mode - 1) + 0.5f;
+    const float off = scale * 0.5f - 0.5f;
+
+    const int array_off = ALIGN_SIZE / sizeof(float);
+    float* dither = (float*)_aligned_malloc(2 * (width + array_off * 2) * sizeof(float), ALIGN_SIZE);	//width±1にアクセスするので前後に伸ばしておく
+    float* dc = dither + array_off;
+    float* dn = dc + width + array_off;	//-1にアクセスするのでポインタは足しておく
+
+    sfmt_t sfmt;
+    int size = max(SFMT_N32, ((width + 3) / 4) * 4);	//sfmt_fill_array32の制限	(624/128+1)*4
+    unsigned int* sfmt_ia = (unsigned int*)_aligned_malloc(size * sizeof(unsigned int), ALIGN_SIZE);	//ランダム値の格納場所
+
+
+    ZeroMemory(dc - array_off, (width + array_off * 2) * sizeof(float));
+
+    for (int y = 0; y < src_height; y++)
+    {
+
+        if (mode == 1) {
+            for (int ii = 0; ii < width; ii++) {
+                dc[ii] += p[ii] + 0.5f;
+            }
+        }
+        else {
+            sfmt_fill_array32(&sfmt, sfmt_ia, size);	//ランダム値生成
+
+            for (int ii = 0; ii < width; ii++) {
+                dc[ii] += p[ii] + (float)sfmt_ia[ii] / (UINT_MAX - 1) * scale - off;		//誤差がdc+1に拡散される前の値なので注意
+            }
+        }
+
+        ZeroMemory(dn - array_off, (width + array_off * 2) * sizeof(float));
+
+        float qerr[4] = { 0,0,0,0 };	//qerr[3]でxloopの誤差を受け渡し [3]は初期化要
+
+        int x = 0;
+        for (; x <= src_width - 4; x += 4)
+        {
+            int v[4];
+            float vtmp[4];
+
+            for (int ii = 0; ii < 4; ii++) {
+                vtmp[ii] = dc[x + ii];
+            }
+
+            vtmp[0] += qerr[3] * floydst[0];		//前xloopの残誤差を拡散
+
+            for (int ii = 0; ii < 4; ii++) {
+                qerr[ii] = p[x + ii];
+            }
+
+            v[0] = min(max((int)vtmp[0], 0), 255);		//new pixel	intとfloatの比較はfloatに変換して行われる
+            qerr[0] -= v[0];							//quant error = p-v ここのvtmpはintしたものを使う必要あり
+
+            vtmp[1] += qerr[0] * floydst[0];
+            v[1] = min(max((int)vtmp[1], 0), 255);
+            qerr[1] -= v[1];
+
+            vtmp[2] += qerr[1] * floydst[0];
+            v[2] = min(max((int)vtmp[2], 0), 255);
+            qerr[2] -= v[2];
+
+            vtmp[3] += qerr[2] * floydst[0];
+            v[3] = min(max((int)vtmp[3], 0), 255);
+            qerr[3] -= v[3];
+
+
+            /*
+            for (int ii = 0; ii < 4; ii++) {
+            dst[x+ ii] = (unsigned char)v[ii];		//new pixel
+            dc[x + ii + 1] += qerr[ii] * floydst[0];
+
+            dn[x + ii - 1] += qerr[ii] * floydst[1];
+            dn[x + ii]     += qerr[ii] * floydst[2];
+            dn[x + ii + 1] += qerr[ii] * floydst[3];
+            }
+            */
+
+            //dc[x + 1] += qerr[0] * floydst[0];	//qerrで次のxloopへ誤差を渡すのでdcの更新は不要
+            //dc[x + 2] += qerr[1] * floydst[0];
+            //dc[x + 3] += qerr[2] * floydst[0];
+            //dc[x + 4] += qerr[3] * floydst[0];	//next x loop first
+
+            dn[x - 1] += qerr[0] * floydst[1];
+
+            dn[x] += qerr[0] * floydst[2];
+            dn[x] += qerr[1] * floydst[1];
+
+            dn[x + 1] += qerr[0] * floydst[3];
+            dn[x + 1] += qerr[1] * floydst[2];
+            dn[x + 1] += qerr[2] * floydst[1];
+
+            dn[x + 2] += qerr[1] * floydst[3];
+            dn[x + 2] += qerr[2] * floydst[2];
+            dn[x + 2] += qerr[3] * floydst[1];
+
+            dn[x + 3] += qerr[2] * floydst[3];
+            dn[x + 3] += qerr[3] * floydst[2];
+
+            dn[x + 4] += qerr[3] * floydst[3];
+
+            dst[x] = (unsigned char)v[0];		//new pixel
+            dst[x + 1] = (unsigned char)v[1];
+            dst[x + 2] = (unsigned char)v[2];
+            dst[x + 3] = (unsigned char)v[3];
+        }
+
+        float qerror = qerr[3];
+        for (; x < src_width; x++)
+        {
+            int v;
+            float vtmp;
+
+            vtmp = dc[x];	//p[x] + dc[x] + mtr.randf()*scale - off;
+            vtmp += qerror * floydst[0];
+
+            v = min(max((int)vtmp, 0), 255);
+            qerror = p[x] - v;
+
+            dst[x] = (unsigned char)v;
+            //if (x != src_width - 1)				//width+array_offまで配列は確保してある
+            //dc[x + 1] += qerror * floydst[0];
+
+            //if (x != 0)							//-array_offまで配列は確保してある
+            dn[x - 1] += qerror * floydst[1];
+            dn[x] += qerror * floydst[2];
+            //if (x != src_width - 1)				//width+array_offまで配列は確保してある
+            dn[x + 1] += qerror * floydst[3];
+        }
+
+        p += width;
+        dst += dst_pitch;
+        float* tn = dn;
+        dn = dc;
+        dc = tn;
+
+    }
+    _aligned_free(dither);
+    _aligned_free(sfmt_ia);
+
 }
 
 #if defined(GCC) || defined(CLANG)
@@ -1017,7 +1166,8 @@ void dfttest::conv_result_plane_to_int(int width, int height, int b, int ebuff_i
   {
     assert(dstPF_lsb != 0);
     unsigned char* dst_lsb_p = dstPF_lsb->GetPtr(b);
-    intcast_float_to_stacked16_C(
+    if (((cpuflags & CPUF_AVX2) && opt == 0) || opt >= 4) intcast_float_to_stacked16_AVX2(ebp, dstp, dst_lsb_p, src_height, src_width, dst_pitch, width);
+    else intcast_float_to_stacked16_C(
       ebp,
       dstp, dst_lsb_p,
       src_height, src_width,
@@ -1027,8 +1177,10 @@ void dfttest::conv_result_plane_to_int(int width, int height, int b, int ebuff_i
   else
   {
     if (bits_per_pixel == 8) {
-      if (dither)
-        dither_C(ebp, dstp, src_height, src_width, dst_pitch, width, dither);
+      if (dither>100)
+        dither_C(ebp, dstp, src_height, src_width, dst_pitch, width, dither-100);
+      else if(dither>0)
+        dither_C_opt(ebp, dstp, src_height, src_width, dst_pitch, width, dither);
       else if (!(src_width & 7) && // mod 8
         (((cpuflags & CPUF_SSE2) && opt == 0) || opt >= 2))
         intcast_float_to_uint8_t_SSE2_8pixels(ebp, dstp, src_height, src_width, dst_pitch, width);
@@ -1681,7 +1833,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
     env->ThrowError("dfttest:  threads must be between 0 and 16 (inclusive)!");
   if (opt < 0 || opt > 4)
     env->ThrowError("dfttest:  opt must be set to 0, 1, 2, 3 or 4!");
-  if (dither < 0 || dither > 100)
+  if (dither < 0 || dither > 200)
     env->ThrowError("dfttest:  invalid dither value!\n");
   if (threads == 0)
     threads = num_processors();
@@ -1765,7 +1917,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
       if ((b == 0 && !Y) || (b == 1 && !U) || (b == 2 && !V))
         continue;
       ebuff[q * 3 + b] = (float*)_aligned_malloc(padPF->GetWidth(b) *
-      (padPF->GetHeight(b) / lsb_in_hmul) * sizeof(float), 16);
+      (padPF->GetHeight(b) / lsb_in_hmul) * sizeof(float), ALIGN_SIZE);
     }
   }
   delete padPF;
@@ -1777,10 +1929,10 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
     assert(dstPF_lsb->GetPitch(PLANAR_U) == dstPF->GetPitch(PLANAR_U));
     assert(dstPF_lsb->GetPitch(PLANAR_V) == dstPF->GetPitch(PLANAR_V));
   }
-  hw = (float*)_aligned_malloc(bvolume * sizeof(float), 16);
+  hw = (float*)_aligned_malloc(bvolume * sizeof(float), ALIGN_SIZE);
   createWindow(hw, tmode, tbsize, tosize, twin, tbeta, smode, sbsize, sosize, swin, sbeta);
-  float* dftgr = (float*)_aligned_malloc(bvolume * sizeof(float), 16);
-  dftgc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), 16);
+  float* dftgr = (float*)_aligned_malloc(bvolume * sizeof(float), ALIGN_SIZE);
+  dftgc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), ALIGN_SIZE);
   
   // FFTW plan construction and destruction are not thread-safe.
   {
@@ -1815,10 +1967,10 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
   sprintf(buf, "dfttest:  scaling factor = %f\n", wscale);
   OutputDebugString(buf);
   fftwf_execute_dft_r2c(ftg, dftgr, dftgc);
-  sigmas = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), 16);
-  sigmas2 = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), 16);
-  pmins = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), 16);
-  pmaxs = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), 16);
+  sigmas = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), ALIGN_SIZE);
+  sigmas2 = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), ALIGN_SIZE);
+  pmins = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), ALIGN_SIZE);
+  pmaxs = (float*)_aligned_malloc((ccnt * 2 + 11) * sizeof(float), ALIGN_SIZE);
   if (_sstring[0] || _ssx[0] || _ssy[0] || _sst[0])
     sigmaFromString(sigmas, _sstring, _ssx, _ssy, _sst, wscalef, env);
   else if (*sfile)
@@ -1849,7 +2001,7 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
     for (int i = 0; i < ccnt * 2; ++i)
       pmaxs[i] = pmax / wscale;
   }
-  fftwf_complex* ta = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 3), 16);
+  fftwf_complex* ta = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 3), ALIGN_SIZE);
   // FFTW plan construction and destruction are not thread-safe.
   // http://www.fftw.org/fftw3_doc/Thread-safety.html#Thread-safety
   {
@@ -1906,13 +2058,13 @@ dfttest::dfttest(PClip _child, bool _Y, bool _U, bool _V, int _ftype, float _sig
       pssInfo[i]->pf = nlf->ppf;
     else
       pssInfo[i]->pfplut = (const unsigned char**)_aligned_malloc(
-        fc->size * sizeof(const unsigned char*), 16);
+        fc->size * sizeof(const unsigned char*), ALIGN_SIZE);
     pssInfo[i]->fc = fc;
     pssInfo[i]->fftwf_execute_dft_r2c = fftwf_execute_dft_r2c;
     pssInfo[i]->fftwf_execute_dft_c2r = fftwf_execute_dft_c2r;
-    pssInfo[i]->dftr = (float*)_aligned_malloc(bvolume * sizeof(float), 16);
-    pssInfo[i]->dftc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), 16);
-    pssInfo[i]->dftc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), 16);
+    pssInfo[i]->dftr = (float*)_aligned_malloc(bvolume * sizeof(float), ALIGN_SIZE);
+    pssInfo[i]->dftc = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), ALIGN_SIZE);
+    pssInfo[i]->dftc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), ALIGN_SIZE);
     for (int b = 0; b < 3; ++b)
     {
       const int height = smode == 0 ? pf->GetHeight(b) / lsb_in_hmul - ((sbsize >> 1) << 1) :
@@ -2120,9 +2272,9 @@ void dfttest::getNoiseSpectrum(const char* fname, const char* nstring,
   PS_INFO* pss = pssInfo[0];
   PlanarFrame* prf = new PlanarFrame(vi_src);
   memset(dest, 0, ccnt * 2 * sizeof(float));
-  float* hw2 = (float*)_aligned_malloc(bvolume * sizeof(float), 16);
+  float* hw2 = (float*)_aligned_malloc(bvolume * sizeof(float), ALIGN_SIZE);
   createWindow(hw2, 0, tbsize, tosize, twin, tbeta, 0, sbsize, sosize, swin, sbeta);
-  fftwf_complex* dftgc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), 16);
+  fftwf_complex* dftgc2 = (fftwf_complex*)_aligned_malloc(sizeof(fftwf_complex) * (ccnt + 11), ALIGN_SIZE);
   float wscale2 = 0.0f, alpha = ftype == 0 ? 5.0f : 7.0f, * dftr = pss->dftr;
   int w = 0;
   for (int s = 0; s < tbsize; ++s)
@@ -2569,7 +2721,7 @@ void createWindow(float* hw, const int tmode, const int tbsize,
     sw[j] = getWinValue(j + 0.5, sbsize, swin, sbeta);
   if (smode == 1)
     normalizeForOverlapAdd(sw, sbsize, sosize);
-  const double nscale = 1.0 / sqrt((double)(tbsize * sbsize * sbsize));
+  const double nscale = 1.0 / sqrt(((double)tbsize * sbsize * sbsize));
   for (int j = 0; j < tbsize; ++j)
     for (int k = 0; k < sbsize; ++k)
       for (int q = 0; q < sbsize; ++q)

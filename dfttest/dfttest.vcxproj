@@ -211,7 +211,7 @@
       <UseIntelOptimizedHeaders>true</UseIntelOptimizedHeaders>
       <UseProcessorExtensions>AVX</UseProcessorExtensions>
       <GPUArch />
-      <EnableEnhancedInstructionSet>StreamingSIMDExtensions</EnableEnhancedInstructionSet>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
@@ -399,6 +399,7 @@
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>
     <ClCompile Include="PlanarFrame.cpp" />
+    <ClCompile Include="SFMT\SFMT.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="avisynth.h" />
@@ -410,6 +411,7 @@
     <ClInclude Include="MersenneTwister.h" />
     <ClInclude Include="PlanarFrame.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="SFMT\SFMT.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="dfttest.rc" />

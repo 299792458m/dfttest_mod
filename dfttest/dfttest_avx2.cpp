@@ -25,6 +25,7 @@
 #include "avs/config.h"
 #include <stdint.h>
 #include "fmath.h"
+#include <windows.h>
 
 #if defined(GCC) || defined(CLANG)
 __attribute__((__target__("fma,avx2")))
@@ -37,19 +38,16 @@ void proc0_uint8_to_float_AVX2_8pixels(const unsigned char* s0, const float* s1,
   {
     for (int v = 0; v < p1; v += 8)
     {
-      auto src = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + v));
+      auto src = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(s0 + p0 * u + v));
       // 8x 8bit->8x32 bits
       auto int8x32 = _mm256_cvtepu8_epi32(src);
       // int -> float
       auto float8x32 = _mm256_cvtepi32_ps(int8x32);
       // mul by weight
-      auto w = _mm256_loadu_ps(s1 + v);
+      auto w = _mm256_loadu_ps(s1 + p1 * u + v);
       auto result = _mm256_mul_ps(float8x32, w);
-      _mm256_storeu_ps(d + v, result);
+      _mm256_storeu_ps(d + p1 * u + v, result);
     }
-    s0 += p0;
-    s1 += p1;
-    d += p1;
   }
   _mm256_zeroupper();
 }
@@ -106,17 +104,14 @@ void proc0_float_to_float_AVX2_8pixels(const unsigned char* s0, const float* s1,
     for (int v = 0; v < p1; v += 8)
     {
       // 8x float
-      auto src = _mm256_loadu_ps(reinterpret_cast<const float *>(s0 + v * sizeof(float)));
+      auto src = _mm256_loadu_ps(reinterpret_cast<const float *>(s0 + p0 * u + v * sizeof(float)));
       // weight
-      auto w = _mm256_loadu_ps(s1 + v);
+      auto w = _mm256_loadu_ps(s1 + p1 * u + v);
       auto result = _mm256_mul_ps(src, w);
       // scale back
       result = _mm256_mul_ps(result, scaler);
-      _mm256_storeu_ps(d + v, result);
+      _mm256_storeu_ps(d + p1 * u + v, result);
     }
-    s0 += p0;
-    s1 += p1;
-    d += p1;
   }
   _mm256_zeroupper();
 }
@@ -132,15 +127,12 @@ void proc1_AVX2_8(const float* s0, const float* s1, float* d,
   {
     for (int v = 0; v < p0; v += 8)
     {
-      auto s0_loop = _mm256_loadu_ps(s0 + v);
-      auto s1_loop = _mm256_loadu_ps(s1 + v);
-      auto d_loop = _mm256_loadu_ps(d + v);
+      auto s0_loop = _mm256_loadu_ps(s0 + u * p0 + v);
+      auto s1_loop = _mm256_loadu_ps(s1 + u * p0 + v);
+      auto d_loop = _mm256_loadu_ps(d + u * p1 + v);
       auto result = _mm256_fmadd_ps(s0_loop, s1_loop, d_loop);
-      _mm256_storeu_ps(d + v, result);
+      _mm256_storeu_ps(d + u * p1 + v, result);
     }
-    s0 += p0;
-    s1 += p0;
-    d += p1;
   }
   _mm256_zeroupper();
 }
@@ -340,3 +332,57 @@ void filter_6_AVX2_8(float* dftc, const float* sigmas, const int ccnt,
   _mm256_zeroupper();
 }
 
+void intcast_float_to_stacked16_AVX2(const float* p, unsigned char* dst, unsigned char* dst_lsb, const int src_height,
+    const int src_width, const int dst_pitch, const int width)
+{
+    //const int saved_rounding_mode = ::_controlfp(RC_NEAR, _MCW_RC);
+    for (int y = 0; y < src_height; ++y)
+    {
+        int x = 0;
+        for (; x < src_width - 15; x += 16)
+        {
+            //const float vf = p[x] * 256;
+            //int v;
+            //v = int(vf + 0.5f);
+            //v = min(max(v, 0), 65535);
+            auto vf1 = _mm256_loadu_ps(p + x);
+            auto vf2 = _mm256_loadu_ps(p + x + 8);
+            vf1 = _mm256_mul_ps(vf1, _mm256_set1_ps(256.0));
+            vf2 = _mm256_mul_ps(vf2, _mm256_set1_ps(256.0));
+            auto v1 = _mm256_cvtps_epi32(vf1);    //cvtpsはMXCSRに従うが、デフォルトで一番近い整数なので四捨五入しなくてよい
+            auto v2 = _mm256_cvtps_epi32(vf2);
+            //vf1 = _mm256_fmadd_ps(vf1, _mm256_set1_ps(256.0),  _mm256_set1_ps(0.5));  //
+            //vf2 = _mm256_fmadd_ps(vf2, _mm256_set1_ps(256.0),  _mm256_set1_ps(0.5));  //
+            //auto v1 = _mm256_cvttps_epi32(vf1);
+            //auto v2 = _mm256_cvttps_epi32(vf2);    //cvttpsは切り捨てなので、元の式からすると0.5足してこっちになるが・・・
+
+            auto v = _mm256_packus_epi32(v1, v2);    //飽和付きで16bitへ なんか31|20のような順番になるので注意
+            //ymmレーンが32bit単位に集めないと超えれないのでとりあえず集める
+            v = _mm256_shuffle_epi8(v, _mm256_set_epi8(15, 13, 11, 9, 7, 5, 3, 1, 14, 12, 10, 8, 6, 4, 2, 0, 15, 13, 11, 9, 7, 5, 3, 1, 14, 12, 10, 8, 6, 4, 2, 0));    //3H 1H 3L 1L 2H 0H 2L 0L
+            v = _mm256_permutevar8x32_epi32(v, _mm256_set_epi32(7, 3, 6, 2, 5, 1, 4, 0));  //3H 2H 1H 0H 3L 2L 1L 0L  ymmレーン越え
+
+
+            //dst[x] = static_cast <unsigned char> (v >> 8);
+            //dst_lsb[x] = static_cast <unsigned char> (v);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + x), _mm256_extracti128_si256(v, 1));   //上位
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dst_lsb + x), _mm256_extracti128_si256(v, 0));//下位
+
+        }
+
+
+        for (; x < src_width; ++x)
+        {
+            const float vf = p[x] * 256;
+            int v;
+            v = int(vf + 0.5f);
+            v = min(max(v, 0), 65535);
+            dst[x] = static_cast <unsigned char> (v >> 8);
+            dst_lsb[x] = static_cast <unsigned char> (v);
+        }
+        p += width;
+        dst += dst_pitch;
+        dst_lsb += dst_pitch;
+    }
+
+    //::_controlfp(saved_rounding_mode, _MCW_RC);
+}

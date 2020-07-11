@@ -57,4 +57,5 @@ void filter_5_AVX2_8(float* dftc, const float* sigmas, const int ccnt,
 void filter_6_AVX2_8(float* dftc, const float* sigmas, const int ccnt,
   const float* pmin, const float* pmax, const float* sigmas2);
 
-
+void intcast_float_to_stacked16_AVX2(const float* p, unsigned char* dst, unsigned char* dst_lsb, const int src_height,
+    const int src_width, const int dst_pitch, const int width);
